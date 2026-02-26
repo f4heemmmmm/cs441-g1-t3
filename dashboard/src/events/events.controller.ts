@@ -1,0 +1,13 @@
+import { Controller, Sse } from '@nestjs/common';
+import { Observable } from 'rxjs';
+import { EventsService } from './events.service';
+
+@Controller('api')
+export class EventsController {
+  constructor(private readonly eventsService: EventsService) {}
+
+  @Sse('events')
+  events(): Observable<MessageEvent> {
+    return this.eventsService.getEvents();
+  }
+}

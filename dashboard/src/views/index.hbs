@@ -1,0 +1,307 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{{title}}</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          colors: {
+            surface: '#0d1117',
+            panel: '#161b22',
+            border: '#30363d',
+            muted: '#8b949e',
+            accent: '#58a6ff',
+            'node-n1': '#f85149',
+            'node-n2': '#3fb950',
+            'node-n3': '#d29922',
+            'node-n4': '#bc8cff',
+            'node-router': '#58a6ff',
+          },
+          fontFamily: {
+            mono: ['Consolas', 'Monaco', 'Courier New', 'monospace'],
+          },
+        }
+      }
+    }
+  </script>
+  <style>
+    @keyframes pulse-link {
+      0% { stroke: #58a6ff; stroke-width: 3; opacity: 1; }
+      100% { stroke: #58a6ff; stroke-width: 2; opacity: 0.3; }
+    }
+    .link-animate { animation: pulse-link 0.6s ease-out; }
+    .tooltip-card { display: none; position: absolute; z-index: 50; }
+    .tooltip-card.active { display: block; }
+    .scenario-content { display: none; }
+    .scenario-content.active { display: block; }
+    .filter-btn.active { ring: 2; }
+    ::-webkit-scrollbar { width: 6px; }
+    ::-webkit-scrollbar-track { background: #0d1117; }
+    ::-webkit-scrollbar-thumb { background: #30363d; border-radius: 3px; }
+    ::-webkit-scrollbar-thumb:hover { background: #484f58; }
+  </style>
+</head>
+<body class="bg-surface text-gray-300 font-mono min-h-screen flex flex-col">
+
+  <!-- HEADER -->
+  <header class="bg-panel border-b border-border px-6 py-3 flex items-center justify-between shrink-0">
+    <div class="flex items-center gap-4">
+      <h1 class="text-lg font-bold text-accent">CS441 Network Emulator Dashboard</h1>
+      <span id="connBadge" class="px-3 py-1 rounded-full text-xs font-bold bg-red-600 text-white">Disconnected</span>
+    </div>
+    <button id="scenarioToggle" class="px-4 py-1.5 rounded-lg text-sm font-medium bg-panel border border-border hover:bg-gray-800 transition-colors">
+      Scenario Guide
+    </button>
+  </header>
+
+  <!-- SCENARIO GUIDE (collapsible) -->
+  <div id="scenarioGuide" class="hidden bg-panel border-b border-border">
+    <div class="px-6 py-3">
+      <!-- Tabs -->
+      <div class="flex gap-2 mb-3 flex-wrap">
+        {{#each scenarios}}
+        <button class="scenario-tab px-3 py-1 rounded text-xs font-bold border border-border hover:bg-gray-800 transition-colors {{#if @first}}bg-accent/20 text-accent border-accent{{else}}text-muted{{/if}}" data-scenario="{{id}}">
+          {{id}}: {{title}}
+        </button>
+        {{/each}}
+      </div>
+      <!-- Content panels -->
+      {{#each scenarios}}
+      <div class="scenario-content {{#if @first}}active{{/if}}" data-scenario="{{id}}">
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-4 text-sm">
+          <div class="bg-surface rounded-lg p-3 border border-border">
+            <div class="text-accent font-bold mb-1">Goal</div>
+            <div class="text-gray-400">{{goal}}</div>
+          </div>
+          <div class="bg-surface rounded-lg p-3 border border-border">
+            <div class="text-accent font-bold mb-1">Command</div>
+            <div class="text-muted text-xs mb-1">{{terminal}}</div>
+            <code class="text-green-400 bg-black/30 px-2 py-0.5 rounded text-xs">{{command}}</code>
+          </div>
+          <div class="bg-surface rounded-lg p-3 border border-border">
+            <div class="text-accent font-bold mb-1">What to Watch</div>
+            <div class="text-gray-400">{{watch}}</div>
+          </div>
+        </div>
+      </div>
+      {{/each}}
+    </div>
+  </div>
+
+  <!-- MAIN CONTENT -->
+  <div class="flex-1 grid grid-cols-1 lg:grid-cols-5 gap-4 p-4 min-h-0">
+
+    <!-- LEFT: Topology (3 cols) -->
+    <div class="lg:col-span-3 bg-panel border border-border rounded-lg flex flex-col min-h-0">
+      <div class="bg-gray-800/50 px-4 py-2 text-xs font-bold text-muted uppercase tracking-wider border-b border-border">Network Topology</div>
+      <div class="flex-1 p-2 flex items-center justify-center relative" id="topologyContainer">
+        <svg id="topologySvg" viewBox="0 0 640 420" xmlns="http://www.w3.org/2000/svg" class="w-full h-full max-h-[360px]">
+          <!-- LAN1 box -->
+          <rect class="fill-gray-800/50 stroke-gray-600" x="20" y="20" width="180" height="200" rx="8" stroke-width="1.5"/>
+          <text class="fill-gray-500 text-[11px] font-bold" x="110" y="40" text-anchor="middle">LAN1 (:5001)</text>
+          <circle id="svg-LAN1" class="fill-gray-600 stroke-gray-500" cx="28" cy="28" r="4" stroke-width="1"/>
+
+          <!-- Node1 -->
+          <circle id="svg-N1" class="fill-gray-600 stroke-gray-500" cx="70" cy="95" r="22" stroke-width="2" data-node="N1"/>
+          <text class="fill-gray-300 text-[11px] font-bold pointer-events-none" x="70" y="99" text-anchor="middle">N1</text>
+          <text class="fill-gray-500 text-[9px] pointer-events-none" x="70" y="124" text-anchor="middle">0x12</text>
+          <text class="fill-red-400 text-[8px] font-semibold pointer-events-none" x="70" y="136" text-anchor="middle">Attacker</text>
+
+          <!-- Node2 -->
+          <circle id="svg-N2" class="fill-gray-600 stroke-gray-500" cx="140" cy="95" r="22" stroke-width="2" data-node="N2"/>
+          <text class="fill-gray-300 text-[11px] font-bold pointer-events-none" x="140" y="99" text-anchor="middle">N2</text>
+          <text class="fill-gray-500 text-[9px] pointer-events-none" x="140" y="124" text-anchor="middle">0x13</text>
+          <text class="fill-green-400 text-[8px] font-semibold pointer-events-none" x="140" y="136" text-anchor="middle">Normal</text>
+
+          <!-- R1 -->
+          <circle id="svg-R1" class="fill-gray-600 stroke-gray-500" cx="110" cy="185" r="16" stroke-width="2" data-node="R1"/>
+          <text class="fill-gray-300 text-[10px] font-bold pointer-events-none" x="110" y="189" text-anchor="middle">R1</text>
+          <text class="fill-gray-500 text-[9px] pointer-events-none" x="110" y="208" text-anchor="middle">0x11</text>
+
+          <!-- LAN2 box -->
+          <rect class="fill-gray-800/50 stroke-gray-600" x="230" y="20" width="180" height="200" rx="8" stroke-width="1.5"/>
+          <text class="fill-gray-500 text-[11px] font-bold" x="320" y="40" text-anchor="middle">LAN2 (:5002)</text>
+          <circle id="svg-LAN2" class="fill-gray-600 stroke-gray-500" cx="238" cy="28" r="4" stroke-width="1"/>
+
+          <!-- Node3 -->
+          <circle id="svg-N3" class="fill-gray-600 stroke-gray-500" cx="320" cy="95" r="22" stroke-width="2" data-node="N3"/>
+          <text class="fill-gray-300 text-[11px] font-bold pointer-events-none" x="320" y="99" text-anchor="middle">N3</text>
+          <text class="fill-gray-500 text-[9px] pointer-events-none" x="320" y="124" text-anchor="middle">0x22</text>
+          <text class="fill-yellow-400 text-[8px] font-semibold pointer-events-none" x="320" y="136" text-anchor="middle">Firewall</text>
+
+          <!-- R2 -->
+          <circle id="svg-R2" class="fill-gray-600 stroke-gray-500" cx="320" cy="185" r="16" stroke-width="2" data-node="R2"/>
+          <text class="fill-gray-300 text-[10px] font-bold pointer-events-none" x="320" y="189" text-anchor="middle">R2</text>
+          <text class="fill-gray-500 text-[9px] pointer-events-none" x="320" y="208" text-anchor="middle">0x21</text>
+
+          <!-- LAN3 box -->
+          <rect class="fill-gray-800/50 stroke-gray-600" x="440" y="20" width="180" height="200" rx="8" stroke-width="1.5"/>
+          <text class="fill-gray-500 text-[11px] font-bold" x="530" y="40" text-anchor="middle">LAN3 (:5003)</text>
+          <circle id="svg-LAN3" class="fill-gray-600 stroke-gray-500" cx="448" cy="28" r="4" stroke-width="1"/>
+
+          <!-- Node4 -->
+          <circle id="svg-N4" class="fill-gray-600 stroke-gray-500" cx="530" cy="95" r="22" stroke-width="2" data-node="N4"/>
+          <text class="fill-gray-300 text-[11px] font-bold pointer-events-none" x="530" y="99" text-anchor="middle">N4</text>
+          <text class="fill-gray-500 text-[9px] pointer-events-none" x="530" y="124" text-anchor="middle">0x32</text>
+          <text class="fill-purple-400 text-[8px] font-semibold pointer-events-none" x="530" y="136" text-anchor="middle">Normal</text>
+
+          <!-- R3 -->
+          <circle id="svg-R3" class="fill-gray-600 stroke-gray-500" cx="530" cy="185" r="16" stroke-width="2" data-node="R3"/>
+          <text class="fill-gray-300 text-[10px] font-bold pointer-events-none" x="530" y="189" text-anchor="middle">R3</text>
+          <text class="fill-gray-500 text-[9px] pointer-events-none" x="530" y="208" text-anchor="middle">0x31</text>
+
+          <!-- Connection lines -->
+          <line id="link-lan1-router" class="stroke-gray-600" x1="110" y1="220" x2="320" y2="310" stroke-width="2"/>
+          <line id="link-lan2-router" class="stroke-gray-600" x1="320" y1="220" x2="320" y2="310" stroke-width="2"/>
+          <line id="link-lan3-router" class="stroke-gray-600" x1="530" y1="220" x2="320" y2="310" stroke-width="2"/>
+
+          <!-- Router box -->
+          <rect class="fill-gray-900 stroke-blue-500" x="250" y="300" width="140" height="50" rx="8" stroke-width="2"/>
+          <text class="fill-blue-400 text-[13px] font-bold pointer-events-none" x="320" y="322" text-anchor="middle">ROUTER</text>
+          <text class="fill-blue-300 text-[9px] pointer-events-none" x="320" y="338" text-anchor="middle">IDS Engine</text>
+          <circle id="svg-ROUTER" class="fill-gray-600 stroke-gray-500" cx="385" cy="308" r="4" stroke-width="1"/>
+
+          <!-- Router click area -->
+          <rect class="fill-transparent cursor-pointer" x="250" y="300" width="140" height="50" rx="8" data-node="ROUTER"/>
+        </svg>
+
+        <!-- Node tooltip -->
+        <div id="nodeTooltip" class="tooltip-card bg-panel border border-border rounded-lg shadow-xl p-3 w-56 text-xs">
+          <div id="ttName" class="text-sm font-bold text-accent mb-2"></div>
+          <div class="space-y-1">
+            <div class="flex justify-between"><span class="text-muted">MAC:</span><span id="ttMAC" class="text-gray-300"></span></div>
+            <div class="flex justify-between"><span class="text-muted">IP:</span><span id="ttIP" class="text-gray-300"></span></div>
+            <div class="flex justify-between"><span class="text-muted">Port:</span><span id="ttPort" class="text-gray-300"></span></div>
+            <div class="flex justify-between"><span class="text-muted">LAN:</span><span id="ttLAN" class="text-gray-300"></span></div>
+            <div class="flex justify-between"><span class="text-muted">Role:</span><span id="ttRole" class="font-bold"></span></div>
+            <div id="ttDesc" class="text-gray-500 mt-1 pt-1 border-t border-border"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- RIGHT: Stats + Process + Feed (2 cols) -->
+    <div class="lg:col-span-2 flex flex-col gap-4 min-h-0">
+
+      <!-- Stats Grid -->
+      <div class="bg-panel border border-border rounded-lg shrink-0">
+        <div class="bg-gray-800/50 px-4 py-2 text-xs font-bold text-muted uppercase tracking-wider border-b border-border">Statistics</div>
+        <div class="p-3">
+          <div class="grid grid-cols-3 gap-2">
+            <div class="bg-surface border border-border rounded-lg p-3 text-center">
+              <div id="stat-frames" class="text-2xl font-bold text-accent">0</div>
+              <div class="text-[10px] text-muted mt-1">Frames</div>
+            </div>
+            <div class="bg-surface border border-border rounded-lg p-3 text-center">
+              <div id="stat-pings" class="text-2xl font-bold text-green-400">0</div>
+              <div class="text-[10px] text-muted mt-1">Pings</div>
+            </div>
+            <div class="bg-surface border border-border rounded-lg p-3 text-center">
+              <div id="stat-forwards" class="text-2xl font-bold text-accent">0</div>
+              <div class="text-[10px] text-muted mt-1">Forwards</div>
+            </div>
+            <div class="bg-surface border border-border rounded-lg p-3 text-center">
+              <div id="stat-ids" class="text-2xl font-bold text-red-400">0</div>
+              <div class="text-[10px] text-muted mt-1">IDS Alerts</div>
+            </div>
+            <div class="bg-surface border border-border rounded-lg p-3 text-center">
+              <div id="stat-firewall" class="text-2xl font-bold text-yellow-400">0</div>
+              <div class="text-[10px] text-muted mt-1">FW Blocks</div>
+            </div>
+            <div class="bg-surface border border-border rounded-lg p-3 text-center">
+              <div id="stat-drops" class="text-2xl font-bold text-gray-400">0</div>
+              <div class="text-[10px] text-muted mt-1">Drops</div>
+            </div>
+          </div>
+
+          <!-- Process Status Bar -->
+          <div class="flex gap-2 flex-wrap mt-3 pt-3 border-t border-border">
+            <div class="flex items-center gap-1.5 px-2.5 py-1 bg-surface border border-border rounded-full text-[10px]" title="LAN1 Emulator - UDP broadcast hub for LAN1 (port 5001)">
+              <span id="dot-LAN1" class="w-2 h-2 rounded-full bg-gray-600"></span>
+              <span class="text-muted">LAN1</span>
+            </div>
+            <div class="flex items-center gap-1.5 px-2.5 py-1 bg-surface border border-border rounded-full text-[10px]" title="LAN2 Emulator - UDP broadcast hub for LAN2 (port 5002)">
+              <span id="dot-LAN2" class="w-2 h-2 rounded-full bg-gray-600"></span>
+              <span class="text-muted">LAN2</span>
+            </div>
+            <div class="flex items-center gap-1.5 px-2.5 py-1 bg-surface border border-border rounded-full text-[10px]" title="LAN3 Emulator - UDP broadcast hub for LAN3 (port 5003)">
+              <span id="dot-LAN3" class="w-2 h-2 rounded-full bg-gray-600"></span>
+              <span class="text-muted">LAN3</span>
+            </div>
+            <div class="flex items-center gap-1.5 px-2.5 py-1 bg-surface border border-border rounded-full text-[10px]" title="Router - IDS Engine, forwards packets between LANs">
+              <span id="dot-ROUTER" class="w-2 h-2 rounded-full bg-gray-600"></span>
+              <span class="text-blue-400 font-semibold">Router</span>
+              <span class="text-gray-600 text-[8px]">IDS</span>
+            </div>
+            <div class="flex items-center gap-1.5 px-2.5 py-1 bg-surface border border-border rounded-full text-[10px]" title="Node1 - Attacker: Spoofing + Sniffing (MAC=N1, IP=0x12, LAN1)">
+              <span id="dot-N1" class="w-2 h-2 rounded-full bg-gray-600"></span>
+              <span class="text-node-n1 font-semibold">N1</span>
+              <span class="text-gray-600 text-[8px]">Attacker</span>
+            </div>
+            <div class="flex items-center gap-1.5 px-2.5 py-1 bg-surface border border-border rounded-full text-[10px]" title="Node2 - Normal node (MAC=N2, IP=0x13, LAN1)">
+              <span id="dot-N2" class="w-2 h-2 rounded-full bg-gray-600"></span>
+              <span class="text-node-n2 font-semibold">N2</span>
+              <span class="text-gray-600 text-[8px]">Normal</span>
+            </div>
+            <div class="flex items-center gap-1.5 px-2.5 py-1 bg-surface border border-border rounded-full text-[10px]" title="Node3 - Firewall: Stateless IP filtering (MAC=N3, IP=0x22, LAN2)">
+              <span id="dot-N3" class="w-2 h-2 rounded-full bg-gray-600"></span>
+              <span class="text-node-n3 font-semibold">N3</span>
+              <span class="text-gray-600 text-[8px]">Firewall</span>
+            </div>
+            <div class="flex items-center gap-1.5 px-2.5 py-1 bg-surface border border-border rounded-full text-[10px]" title="Node4 - Normal node (MAC=N4, IP=0x32, LAN3)">
+              <span id="dot-N4" class="w-2 h-2 rounded-full bg-gray-600"></span>
+              <span class="text-node-n4 font-semibold">N4</span>
+              <span class="text-gray-600 text-[8px]">Normal</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Event Type Legend -->
+      <div class="bg-panel border border-border rounded-lg shrink-0">
+        <div class="bg-gray-800/50 px-4 py-2 text-xs font-bold text-muted uppercase tracking-wider border-b border-border">Event Types</div>
+        <div class="p-2 flex flex-wrap gap-1">
+          {{#each eventTypes}}
+          <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[9px] font-bold" style="background:{{bg}};color:{{color}}" title="{{desc}}">
+            {{type}}
+          </span>
+          {{/each}}
+        </div>
+      </div>
+
+      <!-- Live Event Feed -->
+      <div class="bg-panel border border-border rounded-lg flex-1 flex flex-col min-h-0">
+        <div class="bg-gray-800/50 px-4 py-2 text-xs font-bold text-muted uppercase tracking-wider border-b border-border flex items-center justify-between">
+          <span>Live Event Feed</span>
+          <span id="eventCount" class="text-gray-600 font-normal normal-case">0 events</span>
+        </div>
+        <!-- Filter buttons -->
+        <div class="flex gap-1 px-3 py-2 border-b border-border flex-wrap">
+          <button class="filter-btn px-2 py-0.5 rounded text-[10px] font-bold bg-accent/20 text-accent border border-accent" data-filter="all">All</button>
+          <button class="filter-btn px-2 py-0.5 rounded text-[10px] font-bold text-muted border border-border hover:bg-gray-800" data-filter="frames">Frames</button>
+          <button class="filter-btn px-2 py-0.5 rounded text-[10px] font-bold text-muted border border-border hover:bg-gray-800" data-filter="pings">Pings</button>
+          <button class="filter-btn px-2 py-0.5 rounded text-[10px] font-bold text-muted border border-border hover:bg-gray-800" data-filter="security">Security</button>
+          <button class="filter-btn px-2 py-0.5 rounded text-[10px] font-bold text-muted border border-border hover:bg-gray-800" data-filter="system">System</button>
+        </div>
+        <div class="flex-1 overflow-y-auto min-h-0" id="eventFeed">
+          <!-- Empty state -->
+          <div id="emptyState" class="flex flex-col items-center justify-center h-full text-center p-6">
+            <div class="text-muted text-sm mb-2">Waiting for events...</div>
+            <div class="text-gray-600 text-xs">Start the Java DashboardServer (T9), then launch emulator processes (T1-T8).</div>
+            <div class="text-gray-600 text-xs mt-1">Click <strong class="text-muted">Scenario Guide</strong> above for demo walkthroughs.</div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <script src="/js/topology.js"></script>
+  <script src="/js/dashboard.js"></script>
+</body>
+</html>

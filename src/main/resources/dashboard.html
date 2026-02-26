@@ -1,0 +1,484 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>CS441 Network Emulator Dashboard</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+    background: #0d1117;
+    color: #c9d1d9;
+    min-height: 100vh;
+  }
+  header {
+    background: #161b22;
+    border-bottom: 1px solid #30363d;
+    padding: 12px 24px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  header h1 { font-size: 18px; color: #58a6ff; }
+  .status-badge {
+    padding: 4px 12px;
+    border-radius: 12px;
+    font-size: 12px;
+    font-weight: bold;
+  }
+  .status-connected { background: #238636; color: #fff; }
+  .status-disconnected { background: #da3633; color: #fff; }
+
+  .main-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    grid-template-rows: auto 1fr;
+    gap: 16px;
+    padding: 16px;
+    height: calc(100vh - 52px);
+  }
+
+  .panel {
+    background: #161b22;
+    border: 1px solid #30363d;
+    border-radius: 8px;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+  }
+  .panel-header {
+    background: #21262d;
+    padding: 8px 16px;
+    font-size: 13px;
+    font-weight: bold;
+    color: #8b949e;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    border-bottom: 1px solid #30363d;
+  }
+  .panel-body {
+    padding: 16px;
+    flex: 1;
+    overflow: auto;
+  }
+
+  /* Topology SVG */
+  .topology-panel { grid-column: 1; grid-row: 1 / 3; }
+  .topology-panel .panel-body { padding: 8px; display: flex; align-items: center; justify-content: center; }
+  svg { width: 100%; height: 100%; }
+  .lan-box { fill: #21262d; stroke: #30363d; stroke-width: 1.5; rx: 8; }
+  .lan-label { fill: #8b949e; font-size: 11px; font-weight: bold; }
+  .node-circle { stroke-width: 2; }
+  .node-label { fill: #c9d1d9; font-size: 10px; text-anchor: middle; font-weight: bold; }
+  .node-ip { fill: #8b949e; font-size: 9px; text-anchor: middle; }
+  .router-rect { fill: #1f2937; stroke: #58a6ff; stroke-width: 2; rx: 6; }
+  .router-label { fill: #58a6ff; font-size: 12px; text-anchor: middle; font-weight: bold; }
+  .link-line { stroke: #30363d; stroke-width: 2; }
+  .link-line.active { stroke: #58a6ff; stroke-width: 3; }
+  .online { fill: #238636; stroke: #2ea043; }
+  .offline { fill: #484f58; stroke: #6e7681; }
+  .node-status { r: 4; }
+
+  @keyframes pulse-line {
+    0% { stroke: #58a6ff; stroke-width: 3; opacity: 1; }
+    100% { stroke: #58a6ff; stroke-width: 2; opacity: 0.3; }
+  }
+  .link-animate {
+    animation: pulse-line 0.6s ease-out;
+  }
+
+  /* Stats panel */
+  .stats-panel { grid-column: 2; grid-row: 1; }
+  .stats-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 10px;
+  }
+  .stat-card {
+    background: #0d1117;
+    border: 1px solid #30363d;
+    border-radius: 6px;
+    padding: 10px;
+    text-align: center;
+  }
+  .stat-value { font-size: 24px; font-weight: bold; color: #58a6ff; }
+  .stat-label { font-size: 11px; color: #8b949e; margin-top: 4px; }
+  .stat-value.alert { color: #f85149; }
+  .stat-value.warn { color: #d29922; }
+  .stat-value.ok { color: #3fb950; }
+
+  /* Process status bar */
+  .process-bar {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+    margin-top: 12px;
+    padding-top: 12px;
+    border-top: 1px solid #30363d;
+  }
+  .process-chip {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    padding: 4px 10px;
+    background: #0d1117;
+    border: 1px solid #30363d;
+    border-radius: 12px;
+    font-size: 11px;
+  }
+  .process-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: #484f58;
+  }
+  .process-dot.online { background: #3fb950; }
+
+  /* Event feed */
+  .feed-panel { grid-column: 2; grid-row: 2; }
+  .feed-panel .panel-body { padding: 0; }
+  .event-feed {
+    font-size: 12px;
+    line-height: 1.6;
+    padding: 8px;
+    overflow-y: auto;
+    height: 100%;
+  }
+  .event-line {
+    padding: 2px 8px;
+    border-radius: 3px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .event-line:hover { background: #21262d; }
+  .event-ts { color: #484f58; margin-right: 6px; }
+  .event-process { font-weight: bold; margin-right: 6px; }
+  .event-type { margin-right: 6px; padding: 1px 5px; border-radius: 3px; font-size: 10px; font-weight: bold; }
+
+  .type-FRAME_SENT, .type-FRAME_RECV { background: #1f2937; color: #8b949e; }
+  .type-FRAME_DROP { background: #3d1f20; color: #f85149; }
+  .type-PING_SENT, .type-PING_RECV { background: #0c2d1a; color: #3fb950; }
+  .type-IDS_ALERT, .type-IDS_BLOCK { background: #5a1e1e; color: #ff7b72; }
+  .type-FIREWALL { background: #3d2e00; color: #d29922; }
+  .type-SNIFF { background: #0d2440; color: #58a6ff; }
+  .type-SPOOF { background: #2d1a3d; color: #bc8cff; }
+  .type-FORWARD { background: #1a2d3d; color: #79c0ff; }
+  .type-REGISTER { background: #0c2d1a; color: #56d364; }
+  .type-STARTUP, .type-INFO { background: #1f2937; color: #8b949e; }
+
+  .process-LAN1, .process-LAN2, .process-LAN3 { color: #8b949e; }
+  .process-N1 { color: #f85149; }
+  .process-N2 { color: #3fb950; }
+  .process-N3 { color: #d29922; }
+  .process-N4 { color: #bc8cff; }
+  .process-ROUTER { color: #58a6ff; }
+</style>
+</head>
+<body>
+<header>
+  <h1>CS441 Network Emulator Dashboard</h1>
+  <span id="connStatus" class="status-badge status-disconnected">Disconnected</span>
+</header>
+<div class="main-grid">
+  <!-- Topology panel -->
+  <div class="panel topology-panel">
+    <div class="panel-header">Network Topology</div>
+    <div class="panel-body">
+      <svg viewBox="0 0 520 400" xmlns="http://www.w3.org/2000/svg">
+        <!-- LAN1 box -->
+        <rect class="lan-box" x="10" y="20" width="150" height="160"/>
+        <text class="lan-label" x="85" y="40" text-anchor="middle">LAN1 (:5001)</text>
+        <!-- Node1 -->
+        <circle id="svg-N1" class="node-circle offline" cx="55" cy="80" r="18"/>
+        <text class="node-label" x="55" y="84">N1</text>
+        <text class="node-ip" x="55" y="104">0x12</text>
+        <!-- Node2 -->
+        <circle id="svg-N2" class="node-circle offline" cx="115" cy="80" r="18"/>
+        <text class="node-label" x="115" y="84">N2</text>
+        <text class="node-ip" x="115" y="104">0x13</text>
+        <!-- R1 -->
+        <circle id="svg-R1" class="node-circle offline" cx="85" cy="150" r="14"/>
+        <text class="node-label" x="85" y="154">R1</text>
+        <text class="node-ip" x="85" y="170">0x11</text>
+
+        <!-- LAN2 box -->
+        <rect class="lan-box" x="185" y="20" width="150" height="160"/>
+        <text class="lan-label" x="260" y="40" text-anchor="middle">LAN2 (:5002)</text>
+        <!-- Node3 -->
+        <circle id="svg-N3" class="node-circle offline" cx="260" cy="80" r="18"/>
+        <text class="node-label" x="260" y="84">N3</text>
+        <text class="node-ip" x="260" y="104">0x22</text>
+        <!-- R2 -->
+        <circle id="svg-R2" class="node-circle offline" cx="260" cy="150" r="14"/>
+        <text class="node-label" x="260" y="154">R2</text>
+        <text class="node-ip" x="260" y="170">0x21</text>
+
+        <!-- LAN3 box -->
+        <rect class="lan-box" x="360" y="20" width="150" height="160"/>
+        <text class="lan-label" x="435" y="40" text-anchor="middle">LAN3 (:5003)</text>
+        <!-- Node4 -->
+        <circle id="svg-N4" class="node-circle offline" cx="435" cy="80" r="18"/>
+        <text class="node-label" x="435" y="84">N4</text>
+        <text class="node-ip" x="435" y="104">0x32</text>
+        <!-- R3 -->
+        <circle id="svg-R3" class="node-circle offline" cx="435" cy="150" r="14"/>
+        <text class="node-label" x="435" y="154">R3</text>
+        <text class="node-ip" x="435" y="170">0x31</text>
+
+        <!-- Connection lines -->
+        <line id="link-lan1-router" class="link-line" x1="85" y1="180" x2="260" y2="260"/>
+        <line id="link-lan2-router" class="link-line" x1="260" y1="180" x2="260" y2="260"/>
+        <line id="link-lan3-router" class="link-line" x1="435" y1="180" x2="260" y2="260"/>
+
+        <!-- Router -->
+        <rect class="router-rect" x="210" y="250" width="100" height="40"/>
+        <text class="router-label" x="260" y="275">ROUTER</text>
+
+        <!-- LAN emulator status dots -->
+        <circle id="svg-LAN1" class="node-status offline" cx="18" cy="25" r="4"/>
+        <circle id="svg-LAN2" class="node-status offline" cx="193" cy="25" r="4"/>
+        <circle id="svg-LAN3" class="node-status offline" cx="368" cy="25" r="4"/>
+        <!-- Router status dot -->
+        <circle id="svg-ROUTER" class="node-status offline" cx="305" cy="255" r="4"/>
+      </svg>
+    </div>
+  </div>
+
+  <!-- Stats panel -->
+  <div class="panel stats-panel">
+    <div class="panel-header">Statistics</div>
+    <div class="panel-body">
+      <div class="stats-grid">
+        <div class="stat-card">
+          <div id="stat-frames" class="stat-value">0</div>
+          <div class="stat-label">Frames</div>
+        </div>
+        <div class="stat-card">
+          <div id="stat-pings" class="stat-value ok">0</div>
+          <div class="stat-label">Pings</div>
+        </div>
+        <div class="stat-card">
+          <div id="stat-forwards" class="stat-value">0</div>
+          <div class="stat-label">Forwards</div>
+        </div>
+        <div class="stat-card">
+          <div id="stat-ids" class="stat-value alert">0</div>
+          <div class="stat-label">IDS Alerts</div>
+        </div>
+        <div class="stat-card">
+          <div id="stat-firewall" class="stat-value warn">0</div>
+          <div class="stat-label">FW Blocks</div>
+        </div>
+        <div class="stat-card">
+          <div id="stat-drops" class="stat-value">0</div>
+          <div class="stat-label">Drops</div>
+        </div>
+      </div>
+      <div class="process-bar" id="processBar">
+        <div class="process-chip"><span class="process-dot" id="dot-LAN1"></span>LAN1</div>
+        <div class="process-chip"><span class="process-dot" id="dot-LAN2"></span>LAN2</div>
+        <div class="process-chip"><span class="process-dot" id="dot-LAN3"></span>LAN3</div>
+        <div class="process-chip"><span class="process-dot" id="dot-ROUTER"></span>Router</div>
+        <div class="process-chip"><span class="process-dot" id="dot-N1"></span>N1</div>
+        <div class="process-chip"><span class="process-dot" id="dot-N2"></span>N2</div>
+        <div class="process-chip"><span class="process-dot" id="dot-N3"></span>N3</div>
+        <div class="process-chip"><span class="process-dot" id="dot-N4"></span>N4</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Event feed -->
+  <div class="panel feed-panel">
+    <div class="panel-header">Live Event Feed</div>
+    <div class="panel-body">
+      <div class="event-feed" id="eventFeed"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+(function() {
+  const MAX_EVENTS = 500;
+  const HEARTBEAT_TIMEOUT = 10000; // 10s - mark offline if no events
+
+  const stats = { frames: 0, pings: 0, forwards: 0, ids: 0, firewall: 0, drops: 0 };
+  const lastSeen = {}; // process -> timestamp
+  const processNames = ['LAN1','LAN2','LAN3','ROUTER','N1','N2','N3','N4'];
+
+  const feedEl = document.getElementById('eventFeed');
+  const connEl = document.getElementById('connStatus');
+
+  // Connect to SSE
+  function connect() {
+    const es = new EventSource('/events');
+
+    es.onopen = function() {
+      connEl.textContent = 'Connected';
+      connEl.className = 'status-badge status-connected';
+    };
+
+    es.onmessage = function(e) {
+      try {
+        const evt = JSON.parse(e.data);
+        if (evt.type === 'CONNECTED') return;
+        handleEvent(evt);
+      } catch(err) { /* ignore parse errors */ }
+    };
+
+    es.onerror = function() {
+      connEl.textContent = 'Disconnected';
+      connEl.className = 'status-badge status-disconnected';
+      es.close();
+      // Reconnect after 3s
+      setTimeout(connect, 3000);
+    };
+  }
+
+  function handleEvent(evt) {
+    // Track process online status
+    if (evt.process) {
+      lastSeen[evt.process] = Date.now();
+      updateProcessStatus();
+    }
+
+    // Update stats
+    updateStats(evt);
+
+    // Animate topology
+    animateTopology(evt);
+
+    // Add to feed
+    addToFeed(evt);
+  }
+
+  function updateStats(evt) {
+    switch(evt.type) {
+      case 'FRAME_SENT':
+      case 'FRAME_RECV':
+        stats.frames++;
+        document.getElementById('stat-frames').textContent = stats.frames;
+        break;
+      case 'PING_SENT':
+      case 'PING_RECV':
+        stats.pings++;
+        document.getElementById('stat-pings').textContent = stats.pings;
+        break;
+      case 'FORWARD':
+        stats.forwards++;
+        document.getElementById('stat-forwards').textContent = stats.forwards;
+        break;
+      case 'IDS_ALERT':
+      case 'IDS_BLOCK':
+        stats.ids++;
+        document.getElementById('stat-ids').textContent = stats.ids;
+        break;
+      case 'FIREWALL':
+        stats.firewall++;
+        document.getElementById('stat-firewall').textContent = stats.firewall;
+        break;
+      case 'FRAME_DROP':
+        stats.drops++;
+        document.getElementById('stat-drops').textContent = stats.drops;
+        break;
+    }
+  }
+
+  function animateTopology(evt) {
+    // Determine which link to animate based on process and event
+    let linkId = null;
+    const p = evt.process;
+
+    if (evt.type === 'FORWARD') {
+      // Flash all links for forwarding
+      animateLink('link-lan1-router');
+      animateLink('link-lan2-router');
+      animateLink('link-lan3-router');
+      return;
+    }
+
+    if (['FRAME_SENT','FRAME_RECV','PING_SENT','PING_RECV'].includes(evt.type)) {
+      if (p === 'N1' || p === 'N2' || p === 'LAN1') linkId = 'link-lan1-router';
+      else if (p === 'N3' || p === 'LAN2') linkId = 'link-lan2-router';
+      else if (p === 'N4' || p === 'LAN3') linkId = 'link-lan3-router';
+      else if (p === 'ROUTER') {
+        // Try to infer from message
+        const msg = evt.msg || '';
+        if (msg.includes('R1') || msg.includes('LAN1')) linkId = 'link-lan1-router';
+        else if (msg.includes('R2') || msg.includes('LAN2')) linkId = 'link-lan2-router';
+        else if (msg.includes('R3') || msg.includes('LAN3')) linkId = 'link-lan3-router';
+      }
+    }
+
+    if (linkId) animateLink(linkId);
+  }
+
+  function animateLink(id) {
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.classList.remove('link-animate');
+    void el.offsetWidth; // force reflow
+    el.classList.add('link-animate');
+    setTimeout(() => el.classList.remove('link-animate'), 600);
+  }
+
+  function addToFeed(evt) {
+    const line = document.createElement('div');
+    line.className = 'event-line';
+
+    const ts = evt.ts ? new Date(evt.ts).toLocaleTimeString('en-US', {hour12:false, hour:'2-digit',minute:'2-digit',second:'2-digit'}) : '';
+    const msgText = escapeHtml(evt.msg || '');
+
+    line.innerHTML =
+      '<span class="event-ts">' + ts + '</span>' +
+      '<span class="event-process process-' + (evt.process||'') + '">' + escapeHtml(evt.process||'?') + '</span>' +
+      '<span class="event-type type-' + (evt.type||'') + '">' + escapeHtml(evt.type||'?') + '</span>' +
+      '<span class="event-msg">' + msgText + '</span>';
+
+    feedEl.appendChild(line);
+
+    // Trim old events
+    while (feedEl.children.length > MAX_EVENTS) {
+      feedEl.removeChild(feedEl.firstChild);
+    }
+
+    // Auto-scroll to bottom
+    feedEl.scrollTop = feedEl.scrollHeight;
+  }
+
+  function updateProcessStatus() {
+    const now = Date.now();
+    processNames.forEach(function(name) {
+      const online = lastSeen[name] && (now - lastSeen[name]) < HEARTBEAT_TIMEOUT;
+
+      // Update chip dot
+      const dot = document.getElementById('dot-' + name);
+      if (dot) {
+        dot.className = 'process-dot' + (online ? ' online' : '');
+      }
+
+      // Update SVG node
+      const svgNode = document.getElementById('svg-' + name);
+      if (svgNode) {
+        svgNode.classList.remove('online', 'offline');
+        svgNode.classList.add(online ? 'online' : 'offline');
+      }
+    });
+  }
+
+  function escapeHtml(s) {
+    const d = document.createElement('div');
+    d.appendChild(document.createTextNode(s));
+    return d.innerHTML;
+  }
+
+  // Periodically check for offline processes
+  setInterval(updateProcessStatus, 3000);
+
+  // Start
+  connect();
+})();
+</script>
+</body>
+</html>
