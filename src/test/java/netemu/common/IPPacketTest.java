@@ -113,12 +113,31 @@ class IPPacketTest {
     }
 
     @Test
+    void protocolDATAConstantIsTwo() {
+        assertEquals(0x02, IPPacket.PROTOCOL_DATA);
+    }
+
+    @Test
+    void dataFactoryMethodSetsProtocol() {
+        IPPacket packet = IPPacket.data(
+                new IPAddress(0x12), new IPAddress(0x22), new byte[]{1, 2, 3});
+        assertEquals(IPPacket.PROTOCOL_DATA, packet.protocol());
+    }
+
+    @Test
     void toStringContainsAddresses() {
         IPPacket packet = IPPacket.icmp(new IPAddress(0x12), new IPAddress(0x22), new byte[5]);
         String str = packet.toString();
         assertTrue(str.contains("0x12"));
         assertTrue(str.contains("0x22"));
         assertTrue(str.contains("ICMP"));
+    }
+
+    @Test
+    void toStringShowsDATAForDataProtocol() {
+        IPPacket packet = IPPacket.data(new IPAddress(0x12), new IPAddress(0x22), new byte[5]);
+        String str = packet.toString();
+        assertTrue(str.contains("DATA"));
     }
 
     @Test

@@ -92,19 +92,22 @@ class IntrusionDetectionSystemTest {
     }
 
     @Test
-    void sameLanSpoofNotDetected() {
+    void sameLanSpoofDetectedViaMacIpBinding() {
         ids.setEnabled(true);
         ids.setActiveMode(true);
 
-        // Node1 (0x12, LAN1) spoofs as Node2 (0x13, LAN1) — same LAN, undetectable
+        // Node1 (MAC=N1, IP=0x12, LAN1) spoofs as Node2 (IP=0x13, LAN1) — same LAN
+        // Cross-LAN check passes (both LAN1), but MAC-IP binding detects the mismatch:
+        // MAC N1 is sending with source IP 0x13, but 0x13 belongs to MAC N2
         IPPacket packet = IPPacket.icmp(new IPAddress(0x13), new IPAddress(0x22),
                 PingMessage.request(1).encode());
         EthernetFrame frame = new EthernetFrame(new MACAddress("N1"), new MACAddress("R1"),
                 packet.encode());
 
         boolean drop = ids.inspect(packet, frame, lan1Interface);
-        assertFalse(drop);
-        assertEquals(0, ids.spoofAlertCount());
+        assertTrue(drop); // Active mode: detected and dropped
+        assertEquals(0, ids.spoofAlertCount()); // Cross-LAN spoof check passes (same LAN)
+        assertEquals(1, ids.macIpAlertCount()); // MAC-IP mismatch detected
     }
 
     @Test
@@ -149,6 +152,57 @@ class IntrusionDetectionSystemTest {
             assertFalse(drop); // passive: never drop
         }
         assertTrue(ids.floodAlertCount() >= 1);
+    }
+
+    @Test
+    void macIpMismatchPassiveModeDoesNotDrop() {
+        ids.setEnabled(true);
+        ids.setActiveMode(false);
+
+        // Node1 (MAC=N1) spoofs as Node2 (IP=0x13) — passive mode: log but don't drop
+        IPPacket packet = IPPacket.icmp(new IPAddress(0x13), new IPAddress(0x22),
+                PingMessage.request(1).encode());
+        EthernetFrame frame = new EthernetFrame(new MACAddress("N1"), new MACAddress("R1"),
+                packet.encode());
+
+        boolean drop = ids.inspect(packet, frame, lan1Interface);
+        assertFalse(drop); // passive mode: never drop
+        assertEquals(1, ids.macIpAlertCount());
+    }
+
+    @Test
+    void noMacIpAlertForLegitimatePacket() {
+        ids.setEnabled(true);
+        ids.setActiveMode(true);
+
+        // Node1 (MAC=N1, IP=0x12) sends with its real IP — no mismatch
+        IPPacket packet = IPPacket.icmp(new IPAddress(0x12), new IPAddress(0x22),
+                PingMessage.request(1).encode());
+        EthernetFrame frame = new EthernetFrame(new MACAddress("N1"), new MACAddress("R1"),
+                packet.encode());
+
+        boolean drop = ids.inspect(packet, frame, lan1Interface);
+        assertFalse(drop);
+        assertEquals(0, ids.macIpAlertCount());
+    }
+
+    @Test
+    void crossLanSpoofTriggersBothAlerts() {
+        ids.setEnabled(true);
+        ids.setActiveMode(true);
+
+        // Node1 (MAC=N1, LAN1) spoofs as Node3 (IP=0x22, LAN2)
+        // Cross-LAN check: 0x22 claims LAN2, arrived on LAN1 — spoof alert
+        // MAC-IP check: N1 sent with IP 0x22, but 0x22 belongs to N3 — MAC-IP alert
+        IPPacket packet = IPPacket.icmp(new IPAddress(0x22), new IPAddress(0x32),
+                PingMessage.request(1).encode());
+        EthernetFrame frame = new EthernetFrame(new MACAddress("N1"), new MACAddress("R1"),
+                packet.encode());
+
+        boolean drop = ids.inspect(packet, frame, lan1Interface);
+        assertTrue(drop);
+        assertEquals(1, ids.spoofAlertCount());
+        assertEquals(1, ids.macIpAlertCount());
     }
 
     @Test

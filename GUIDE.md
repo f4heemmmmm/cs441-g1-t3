@@ -21,6 +21,9 @@
   - [Demo 8 — IDS Spoof Detection (Passive)](#demo-8--ids-spoof-detection-passive-mode)
   - [Demo 9 — IDS Spoof Detection (Active)](#demo-9--ids-spoof-detection-active-mode)
   - [Demo 10 — IDS Ping Flood Detection](#demo-10--ids-ping-flood-detection)
+  - [Demo 11 — Text Messaging](#demo-11--text-messaging-between-nodes)
+  - [Demo 12 — Encrypted Messaging vs Sniffing](#demo-12--encrypted-messaging-vs-sniffing)
+  - [Demo 13 — IDS MAC-IP Binding Detection](#demo-13--ids-mac-ip-binding-detection-same-lan-spoof)
 - [10. Log Format Reference](#10-log-format-reference)
 - [11. Unit Tests](#11-unit-tests)
 
@@ -33,8 +36,9 @@ This project emulates an **IP-over-Ethernet network** using Java UDP sockets. It
 - **Ethernet frame transmission** with MAC-based filtering on broadcast LANs
 - **IP packet routing** across multiple LAN segments through a router
 - **ICMP ping** (echo request/reply) with RTT measurement
+- **Text messaging** with plaintext and encrypted modes (XOR cipher)
 - **Security attacks**: IP spoofing, network sniffing (promiscuous mode), and ping flooding
-- **Security defenses**: a packet-filtering firewall and an Intrusion Detection System (IDS)
+- **Security defenses**: a packet-filtering firewall, an Intrusion Detection System (IDS) with MAC-IP binding verification, and encrypted communication
 
 Each network device (node, router, LAN emulator) runs as a **separate Java process** and communicates via localhost UDP sockets, faithfully emulating real Ethernet broadcast behavior.
 
@@ -132,9 +136,9 @@ Each network device (node, router, LAN emulator) runs as a **separate Java proce
 
 - **Source IP**: 1 byte (e.g., `0x12`)
 - **Destination IP**: 1 byte (e.g., `0x22`)
-- **Protocol**: 1 byte (`0x01` = ICMP)
+- **Protocol**: 1 byte (`0x01` = ICMP, `0x02` = DATA)
 - **Data Length**: 1 unsigned byte
-- **Data**: 0 to 256 bytes (the ICMP/ping payload)
+- **Data**: 0 to 256 bytes (the ICMP/ping or text message payload)
 
 ### Ping (ICMP Echo) Message
 
@@ -150,6 +154,23 @@ Each network device (node, router, LAN emulator) runs as a **separate Java proce
 - **Sequence**: 1 unsigned byte (0–255)
 - **Timestamp**: 8 bytes, big-endian `System.currentTimeMillis()` — used for RTT calculation
 - **Total**: 10 bytes fixed
+
+### Text Message (DATA Protocol)
+
+```
+ 0      1      2                     1+N
+┌──────┬──────┬──────────────────────┐
+│ Enc  │TxLen │  Text (0-254 bytes)  │
+│ 1 B  │ 1 B  │     ASCII string     │
+└──────┴──────┴──────────────────────┘
+```
+
+- **Encrypted flag**: `0x00` = plaintext, `0x01` = encrypted (XOR cipher)
+- **Text Length**: 1 unsigned byte (0–254)
+- **Text**: 0 to 254 bytes of ASCII text data
+- **Header size**: 2 bytes
+- When encrypted, the text is XOR-encrypted with a shared key before transmission
+- A sniffer sees the raw encrypted bytes; the legitimate receiver decrypts on arrival
 
 ---
 
@@ -171,7 +192,8 @@ The base class for all network nodes. Provides:
 - **MAC filtering**: Drops frames where the destination MAC does not match this node's MAC (and is not broadcast `FF`)
 - **IP packet handling**: Decodes IP packets from accepted frames
 - **Ping handling**: Automatically replies to ICMP echo requests; logs echo replies with RTT
-- **Interactive CLI**: Command loop for sending pings and inspecting node state
+- **Text messaging**: Send plaintext or encrypted messages to other nodes
+- **Interactive CLI**: Command loop for sending pings, messages, and inspecting node state
 
 ### Node1 — Attacker (`netemu.device.Node1`)
 
@@ -213,8 +235,9 @@ A source-IP-based packet filter:
 
 The open-category extension. Monitors router-forwarded traffic for:
 
-1. **IP Spoof Detection**: If a packet's source IP belongs to a different LAN than the interface it arrived on, it's flagged as a potential spoof. (e.g., source IP `0x22`/LAN2 arriving on the LAN1 interface)
-2. **Ping Flood Detection**: Tracks ICMP echo requests per source IP in a sliding 5-second window. If more than 10 requests arrive within the window, it flags a flood.
+1. **IP Spoof Detection (Cross-LAN)**: If a packet's source IP belongs to a different LAN than the interface it arrived on, it's flagged as a potential spoof. (e.g., source IP `0x22`/LAN2 arriving on the LAN1 interface)
+2. **MAC-IP Binding Verification (Same-LAN)**: Verifies that the source MAC address matches the expected MAC for the source IP using the address table. Catches same-LAN spoofing that cross-LAN detection cannot. (e.g., MAC `N1` sending with source IP `0x13` when `0x13` belongs to MAC `N2`)
+3. **Ping Flood Detection**: Tracks ICMP echo requests per source IP in a sliding 5-second window. If more than 10 requests arrive within the window, it flags a flood.
 
 Two operating modes:
 - **Passive**: Logs alerts only (packets are still forwarded)
@@ -231,7 +254,7 @@ cd cs441-g1-t3
 mvn clean package
 ```
 
-This compiles the project, runs all 109 unit tests, and produces a fat JAR at:
+This compiles the project, runs all 130 unit tests, and produces a fat JAR at:
 ```
 target/netemu-1.0-SNAPSHOT.jar
 ```
@@ -340,6 +363,8 @@ HH:mm:ss.SSS [Node1] Connected to LAN1 emulator
 
 --- Node1 Commands ---
   ping <destIP> [count <n>]  - Send ping(s)
+  msg <destIP> <text>        - Send plaintext message
+  emsg <destIP> <text>       - Send encrypted message
   info                       - Show interface info
   help                       - Show this help
   quit                       - Exit
@@ -356,11 +381,13 @@ All 8 processes are now running. Type commands in any node's terminal to interac
 
 ## 8. CLI Command Reference
 
-### All Nodes + Router
+### All Nodes
 
 | Command | Description |
 |---------|-------------|
 | `ping <destIP> [count <n>]` | Send `n` ICMP echo requests to `destIP` (hex, e.g., `0x22`). Default count is 1. |
+| `msg <destIP> <text>` | Send a **plaintext** text message to `destIP`. The message text is everything after the IP address. |
+| `emsg <destIP> <text>` | Send an **encrypted** text message to `destIP`. Uses XOR cipher — content is unreadable by sniffers. |
 | `info` | Print this device's MAC, IP, LAN, and port number. |
 | `help` | Show available commands. |
 | `quit` | Gracefully exit the process. |
@@ -587,7 +614,7 @@ IP spoofing is one of the most fundamental network attacks. In a real network, t
 - Frame another host as the source of malicious traffic
 - Bypass IP-based access controls
 
-This demo also shows a **limitation of the router's IDS**: since both Node1 (`0x12`) and Node2 (`0x13`) are on the same LAN (LAN1), the IDS cannot distinguish the spoof — the source IP `0x13` legitimately belongs to LAN1, matching the ingress interface.
+Note: While the IDS's cross-LAN check would not catch this spoof (both Node1 and Node2 are on LAN1), the **MAC-IP binding verification** will detect it — because MAC `N1` is sending with source IP `0x13`, which should belong to MAC `N2`. See Demo 13 for details.
 
 #### Steps
 
@@ -865,21 +892,23 @@ ping 0x32
 HH:mm:ss.SSS [Router] RX Frame [N1 -> R1 | 14 bytes] on R1
 HH:mm:ss.SSS [Router]   └─ Packet [0x22 -> 0x32 | ICMP | 10 bytes]
 HH:mm:ss.SSS [Router] SECURITY: IDS Alert — IP spoof detected: 0x22 claims LAN2 but arrived on LAN1 (MAC: N1)
+HH:mm:ss.SSS [Router] SECURITY: IDS Alert — MAC-IP mismatch: N1 sent packet with source IP 0x22 (expected MAC: N3)
 HH:mm:ss.SSS [Router] Routing: 0x22 -> 0x32 via LAN3
 HH:mm:ss.SSS [Router] TX Frame [R3 -> N4 | 14 bytes]
 HH:mm:ss.SSS [Router]   └─ Packet [0x22 -> 0x32 | ICMP | 10 bytes]
 ```
 
-The alert is logged, but the packet was still forwarded. Check IDS statistics:
+The alerts are logged, but the packet was still forwarded (passive mode). Check IDS statistics:
 ```
 ids status
 ```
 Output:
 ```
-  IDS:          ON (monitoring)
-  Mode:         PASSIVE (log only)
-  Spoof alerts: 1
-  Flood alerts: 0
+  IDS:            ON (monitoring)
+  Mode:           PASSIVE (log only)
+  Spoof alerts:   1
+  MAC-IP alerts:  1
+  Flood alerts:   0
 ```
 
 **Clean up on Node1:**
@@ -927,10 +956,11 @@ ping 0x32
 HH:mm:ss.SSS [Router] RX Frame [N1 -> R1 | 14 bytes] on R1
 HH:mm:ss.SSS [Router]   └─ Packet [0x22 -> 0x32 | ICMP | 10 bytes]
 HH:mm:ss.SSS [Router] SECURITY: IDS Alert — IP spoof detected: 0x22 claims LAN2 but arrived on LAN1 (MAC: N1)
+HH:mm:ss.SSS [Router] SECURITY: IDS Alert — MAC-IP mismatch: N1 sent packet with source IP 0x22 (expected MAC: N3)
 HH:mm:ss.SSS [Router] SECURITY: IDS Action — Dropped packet from 0x22
 ```
 
-Note: No "Routing:" or "TX" message appears — the packet was dropped after the RX.
+Note: No "Routing:" or "TX" message appears — the packet was dropped after the RX. Both the cross-LAN check and the MAC-IP binding check triggered alerts.
 
 **Node4 terminal:** (nothing — the ping never arrives)
 
@@ -1015,10 +1045,201 @@ ids status
 ```
 Output:
 ```
-  IDS:          ON (monitoring)
-  Mode:         ACTIVE (log + drop)
-  Spoof alerts: 0
-  Flood alerts: 11
+  IDS:            ON (monitoring)
+  Mode:           ACTIVE (log + drop)
+  Spoof alerts:   0
+  MAC-IP alerts:  0
+  Flood alerts:   11
+```
+
+---
+
+### Demo 11 — Text Messaging Between Nodes
+
+#### What we are simulating
+
+Nodes sending **text messages** to each other using the DATA protocol (`0x02`). This demonstrates a second application-layer protocol built on top of IP, beyond just ping/ICMP.
+
+#### Why this matters
+
+Real networks carry many types of traffic. By implementing a text messaging protocol alongside ICMP, we show that the IP layer is protocol-agnostic — it carries any payload identified by the protocol field. This also sets up Demo 12, where encryption protects message confidentiality.
+
+#### Steps
+
+**On Node2's terminal, send a plaintext message to Node3:**
+```
+msg 0x22 Hello from Node2!
+```
+
+#### What happens
+
+1. Node2 creates a `TextMessage` with the plaintext "Hello from Node2!".
+2. Node2 wraps it in an IP packet (src=`0x13`, dst=`0x22`, proto=DATA).
+3. Since `0x22` is on LAN2 (different LAN), Node2 sends to Router R1.
+4. Router forwards the packet from LAN1 to LAN2.
+5. Node3 receives the message, decodes the text, and logs: `Message from 0x13: "Hello from Node2!"`.
+
+#### Expected output
+
+**Node2 terminal:**
+```
+HH:mm:ss.SSS [Node2] Sending plaintext message to 0x22: "Hello from Node2!"
+HH:mm:ss.SSS [Node2] TX Frame [N2 -> R1 | 24 bytes]
+HH:mm:ss.SSS [Node2]   └─ Packet [0x13 -> 0x22 | DATA | 19 bytes]
+```
+
+**Router terminal:**
+```
+HH:mm:ss.SSS [Router] RX Frame [N2 -> R1 | 24 bytes] on R1
+HH:mm:ss.SSS [Router]   └─ Packet [0x13 -> 0x22 | DATA | 19 bytes]
+HH:mm:ss.SSS [Router] Routing: 0x13 -> 0x22 via LAN2
+HH:mm:ss.SSS [Router] TX Frame [R2 -> N3 | 24 bytes]
+HH:mm:ss.SSS [Router]   └─ Packet [0x13 -> 0x22 | DATA | 19 bytes]
+```
+
+**Node3 terminal:**
+```
+HH:mm:ss.SSS [Node3] RX Frame [R2 -> N3 | 24 bytes]
+HH:mm:ss.SSS [Node3]   └─ Packet [0x13 -> 0x22 | DATA | 19 bytes]
+HH:mm:ss.SSS [Node3] RX Message from 0x13: "Hello from Node2!"
+```
+
+---
+
+### Demo 12 — Encrypted Messaging vs Sniffing
+
+#### What we are simulating
+
+A direct comparison between **plaintext** and **encrypted** text messages, with Node1 sniffing LAN1 traffic. This demonstrates that:
+- Plaintext messages can be read by a sniffer (confidentiality breach)
+- Encrypted messages appear as gibberish to the sniffer (confidentiality preserved)
+
+#### Why this matters
+
+This is the core **confidentiality** demonstration. Encryption is the primary defense against sniffing attacks. Even though the sniffer can capture the encrypted frames, it cannot read the contents without the decryption key. The legitimate receiver decrypts the message and reads it normally.
+
+#### Steps
+
+**Step 1 — Enable sniffing on Node1:**
+```
+sniff on
+```
+
+**Step 2 — Send a plaintext message from Node2 to Node4 (same-LAN Node2 -> router -> Node4):**
+
+On Node2:
+```
+msg 0x11 Secret plans inside
+```
+
+**Step 3 — Observe that Node1 captures the plaintext:**
+
+Node1 sees:
+```
+HH:mm:ss.SSS [Node1] [Sniffed] Frame [N2 -> R1 | 25 bytes]
+HH:mm:ss.SSS [Node1]   └─ Packet [0x13 -> 0x11 | DATA | 20 bytes]
+HH:mm:ss.SSS [Node1]      └─ Message [PLAIN] "Secret plans inside"
+```
+
+The sniffer can read the message in full!
+
+**Step 4 — Now send an encrypted message from Node2:**
+
+On Node2:
+```
+emsg 0x11 Secret plans inside
+```
+
+**Step 5 — Observe that Node1 cannot read the encrypted message:**
+
+Node1 sees:
+```
+HH:mm:ss.SSS [Node1] [Sniffed] Frame [N2 -> R1 | 25 bytes]
+HH:mm:ss.SSS [Node1]   └─ Packet [0x13 -> 0x11 | DATA | 20 bytes]
+HH:mm:ss.SSS [Node1]      └─ Message [ENCRYPTED] "..." (cannot read — encrypted)
+```
+
+The encrypted text appears as garbled characters. The sniffer knows a message was sent and that it's encrypted, but cannot read the contents.
+
+**Meanwhile, the Router (legitimate receiver) can decrypt:**
+```
+HH:mm:ss.SSS [Router] RX Encrypted message from 0x13: "Secret plans inside"
+```
+
+#### Key takeaway
+
+| Message type | Sniffer (Node1) can read? | Receiver can read? |
+|-------------|--------------------------|-------------------|
+| Plaintext (`msg`) | Yes — full content visible | Yes |
+| Encrypted (`emsg`) | No — only sees garbled text | Yes — decrypts automatically |
+
+**Clean up:**
+```
+sniff off
+```
+
+---
+
+### Demo 13 — IDS MAC-IP Binding Detection (Same-LAN Spoof)
+
+#### What we are simulating
+
+Node1 spoofs Node2's IP address (`0x13`) while remaining on the same LAN. The IDS's **cross-LAN detection** would miss this (both `0x12` and `0x13` are on LAN1), but the **MAC-IP binding verification** catches it — because MAC `N1` is sending packets with source IP `0x13`, which should belong to MAC `N2`.
+
+#### Why this matters
+
+Cross-LAN spoof detection alone has a blind spot: it cannot detect spoofing within the same LAN segment. MAC-IP binding verification closes this gap by verifying that each MAC address only sends packets with its own IP address. This is analogous to **Dynamic ARP Inspection (DAI)** in real network switches.
+
+#### Steps
+
+**On the Router's terminal, enable IDS in active mode:**
+```
+ids on
+ids mode active
+```
+
+**On Node1's terminal, spoof as Node2 and ping Node3:**
+```
+spoof on 0x13
+ping 0x22
+```
+
+#### What happens
+
+1. Node1 sends a ping with source IP `0x13` (spoofed) from MAC `N1`.
+2. The packet arrives at Router R1 (LAN1).
+3. **Cross-LAN check**: Source IP `0x13` → LAN1, arrived on LAN1 → PASS (same LAN, no alert).
+4. **MAC-IP binding check**: Source IP `0x13` should have MAC `N2` (per address table), but the frame's source MAC is `N1` → MISMATCH → alert triggered.
+5. In **active mode**, the packet is **dropped**. Node3 never receives it.
+
+#### Expected output
+
+**Router terminal:**
+```
+HH:mm:ss.SSS [Router] RX Frame [N1 -> R1 | 14 bytes] on R1
+HH:mm:ss.SSS [Router]   └─ Packet [0x13 -> 0x22 | ICMP | 10 bytes]
+HH:mm:ss.SSS [Router] SECURITY: IDS Alert — MAC-IP mismatch: N1 sent packet with source IP 0x13 (expected MAC: N2)
+HH:mm:ss.SSS [Router] SECURITY: IDS Action — Dropped packet from 0x13
+```
+
+**Check IDS status:**
+```
+ids status
+```
+Output:
+```
+  IDS:            ON (monitoring)
+  Mode:           ACTIVE (log + drop)
+  Spoof alerts:   0
+  MAC-IP alerts:  1
+  Flood alerts:   0
+```
+
+Note that the spoof alert count is 0 (cross-LAN check passed), but the MAC-IP alert count is 1. The MAC-IP binding detection caught what cross-LAN detection could not.
+
+**Clean up on Node1:**
+```
+spoof off
 ```
 
 ---
@@ -1051,7 +1272,7 @@ HH:mm:ss.SSS [ComponentName] [LEVEL:] message
 
 ## 11. Unit Tests
 
-Run all 109 tests with:
+Run all 130 tests with:
 ```bash
 mvn test
 ```
@@ -1059,12 +1280,13 @@ mvn test
 | Test Class | Tests | What it covers |
 |-----------|-------|----------------|
 | `EthernetFrameTest` | 10 | Frame encode/decode, round-trip fidelity, max data size, empty data, oversized rejection, unsigned length field, IP packet payload integration |
-| `IPPacketTest` | 12 | Packet encode/decode, ICMP factory method, round-trip fidelity, empty/max data, oversized rejection, unsigned length field, full-stack test (Ping inside IP inside Ethernet) |
+| `IPPacketTest` | 15 | Packet encode/decode, ICMP/DATA factory methods, round-trip fidelity, empty/max data, oversized rejection, unsigned length field, protocol constants, toString formats, full-stack test (Ping inside IP inside Ethernet) |
 | `PingMessageTest` | 12 | Request/reply creation, timestamp preservation, encode/decode round-trip, unsigned sequence, 8-byte timestamp range, RTT calculation, ICMP type constants |
+| `TextMessageTest` | 15 | Plaintext/encrypted encode/decode round-trips, XOR encryption obfuscation, decodeRaw (no decryption for sniffing), empty text, max length, length validation, toString content, full-stack tests (Text inside IP inside Ethernet, encrypted end-to-end) |
 | `MACAddressTest` | 12 | Constructor validation (null, too short, too long), ASCII encode/decode, writeTo offset, round-trip, broadcast constant, equality/hashCode |
 | `IPAddressTest` | 13 | Valid range (0x00–0xFF), boundary rejection, hex parsing (0x prefix, 0X prefix, no prefix), toByte, fromByte, LAN ID extraction, equality, hex string formatting |
 | `ByteUtilTest` | 11 | Big-endian short read/write, round-trip, hex parse/format, array slice (sub-array, from start, zero-length, source immutability) |
 | `AddressTableTest` | 17 | Port distinctness, all expected port/IP/MAC values, IP-to-MAC resolution, LAN lookup, router MAC/IP by LAN, unknown-input error cases |
 | `FirewallTest` | 9 | Enabled by default, block/unblock rules, disabled bypasses rules, re-enable restores rules, multiple blocked sources, snapshot immutability, idempotent block |
-| `IntrusionDetectionSystemTest` | 9 | Disabled by default, passive spoof detection (log only), active spoof detection (drop), legitimate packets pass, same-LAN spoof undetectable, flood threshold trigger, passive flood (no drop), alert counter accumulation |
+| `IntrusionDetectionSystemTest` | 12 | Disabled by default, passive/active cross-LAN spoof detection, MAC-IP binding mismatch detection (same-LAN spoofing), combined cross-LAN + MAC-IP alerts, legitimate packets pass, flood threshold trigger, passive flood (no drop), alert counter accumulation |
 | `NetworkInterfaceTest` | 4 | Record field access, toString content, equality, inequality |

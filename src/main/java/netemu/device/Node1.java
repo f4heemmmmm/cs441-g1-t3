@@ -39,6 +39,14 @@ public class Node1 extends Node {
                 if (packet.protocol() == IPPacket.PROTOCOL_ICMP) {
                     PingMessage ping = PingMessage.decode(packet.data());
                     log.info("     └─ " + ping);
+                } else if (packet.protocol() == IPPacket.PROTOCOL_DATA) {
+                    // Use decodeRaw to see exactly what's on the wire (no decryption)
+                    TextMessage msg = TextMessage.decodeRaw(packet.data());
+                    if (msg.isEncrypted()) {
+                        log.info("     └─ " + msg.toString() + " (cannot read — encrypted)");
+                    } else {
+                        log.info("     └─ " + msg);
+                    }
                 }
             } catch (Exception e) {
                 // Invalid IP packet, log the raw frame

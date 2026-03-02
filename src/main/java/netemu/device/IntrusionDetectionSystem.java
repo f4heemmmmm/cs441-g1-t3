@@ -8,8 +8,9 @@ import java.util.concurrent.atomic.AtomicInteger;
 /**
  * Intrusion Detection System (IDS) for the router.
  * Detects:
- *  1. IP Spoofing: Source IP doesn't match expected LAN for incoming interface
- *  2. Ping Flood: Too many pings from the same source in a certain time window
+ *  1. IP Spoofing (cross-LAN): Source IP doesn't match expected LAN for incoming interface
+ *  2. MAC-IP Mismatch (same-LAN): Source MAC doesn't match expected MAC for source IP
+ *  3. Ping Flood: Too many pings from the same source in a certain time window
  *
  * Modes:
  *  - Passive: Log alerts only
@@ -26,6 +27,7 @@ public class IntrusionDetectionSystem {
 
     private final AtomicInteger spoofAlerts = new AtomicInteger(0);
     private final AtomicInteger floodAlerts = new AtomicInteger(0);
+    private final AtomicInteger macIpAlerts = new AtomicInteger(0);
     private final ConcurrentHashMap<IPAddress, FloodTracker> pingTrackers = new ConcurrentHashMap<>();
 
     public IntrusionDetectionSystem(Log log) {
@@ -41,7 +43,7 @@ public class IntrusionDetectionSystem {
 
         boolean suspicious = false;
 
-        // Check 1: Spoof Detection
+        // Check 1: Spoof Detection (cross-LAN)
         // The LAN ID of the source IP Address should match the LAN ID of the incoming interface
         if (packet.sourceIPAddress().lanID() != incomingNetworkInterfaceCard.lanID()) {
             spoofAlerts.incrementAndGet();
@@ -49,7 +51,20 @@ public class IntrusionDetectionSystem {
             suspicious = true;
         }
 
-        // Check 2: Ping Flood Detection
+        // Check 2: MAC-IP Binding Verification (same-LAN spoof detection)
+        // Verify that the source MAC matches the expected MAC for the source IP
+        try {
+            MACAddress expectedMAC = AddressTable.resolve(packet.sourceIPAddress());
+            if (!expectedMAC.equals(frame.sourceMACAddress())) {
+                macIpAlerts.incrementAndGet();
+                log.security("IDS Alert — MAC-IP mismatch: " + frame.sourceMACAddress() + " sent packet with source IP " + packet.sourceIPAddress() + " (expected MAC: " + expectedMAC + ")");
+                suspicious = true;
+            }
+        } catch (IllegalArgumentException e) {
+            // Unknown IP, skip MAC-IP check
+        }
+
+        // Check 3: Ping Flood Detection
         if (packet.protocol() == IPPacket.PROTOCOL_ICMP) {
             PingMessage ping = PingMessage.decode(packet.data());
             if (ping.isRequest()) {
@@ -94,11 +109,16 @@ public class IntrusionDetectionSystem {
         return floodAlerts.get();
     }
 
+    public int macIpAlertCount() {
+        return macIpAlerts.get();
+    }
+
     public void printStatus() {
-        System.out.println("  IDS:          " + (enabled ? "ON (monitoring)" : "OFF (disabled)"));
-        System.out.println("  Mode:         " + (activeMode ? "ACTIVE (log + drop)" : "PASSIVE (log only)"));
-        System.out.println("  Spoof alerts: " + spoofAlerts.get());
-        System.out.println("  Flood alerts: " + floodAlerts.get());
+        System.out.println("  IDS:            " + (enabled ? "ON (monitoring)" : "OFF (disabled)"));
+        System.out.println("  Mode:           " + (activeMode ? "ACTIVE (log + drop)" : "PASSIVE (log only)"));
+        System.out.println("  Spoof alerts:   " + spoofAlerts.get());
+        System.out.println("  MAC-IP alerts:  " + macIpAlerts.get());
+        System.out.println("  Flood alerts:   " + floodAlerts.get());
     }
 
     /*

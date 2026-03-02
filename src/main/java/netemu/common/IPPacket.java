@@ -10,6 +10,7 @@ public class IPPacket {
     public static final int HEADER_SIZE = 4;
     public static final int MAX_DATA_LENGTH = 256;
     public static final byte PROTOCOL_ICMP = 0x01;
+    public static final byte PROTOCOL_DATA = 0x02;
 
     private final byte[] data;
     private final byte protocol;
@@ -29,6 +30,11 @@ public class IPPacket {
     // Create an ICMP/ping packet
     public static IPPacket icmp(IPAddress sourceIPAddress, IPAddress destinationIPAddress, byte[] pingData) {
         return new IPPacket(sourceIPAddress, destinationIPAddress, PROTOCOL_ICMP, pingData);
+    }
+
+    // Create a data/text packet
+    public static IPPacket data(IPAddress sourceIPAddress, IPAddress destinationIPAddress, byte[] messageData) {
+        return new IPPacket(sourceIPAddress, destinationIPAddress, PROTOCOL_DATA, messageData);
     }
 
     // Encode IP Packet into raw packet bytes (byte array)
@@ -77,7 +83,11 @@ public class IPPacket {
 
     @Override
     public String toString() {
-        String protoName = (protocol == PROTOCOL_ICMP) ? "ICMP" : String.valueOf(protocol & 0xFF);
+        String protoName = switch (protocol) {
+            case PROTOCOL_ICMP -> "ICMP";
+            case PROTOCOL_DATA -> "DATA";
+            default -> String.valueOf(protocol & 0xFF);
+        };
         return String.format("Packet [%s -> %s | %s | %d bytes]", sourceIPAddress, destinationIPAddress, protoName, data.length);
     }
 }

@@ -114,6 +114,20 @@ public abstract class Node {
     protected void handleIPPacket(IPPacket packet, EthernetFrame frame) {
         if (packet.protocol() == IPPacket.PROTOCOL_ICMP) {
             handlePing(packet, frame);
+        } else if (packet.protocol() == IPPacket.PROTOCOL_DATA) {
+            handleTextMessage(packet);
+        }
+    }
+
+    /**
+     * Handle incoming text message (plaintext or encrypted)
+     */
+    protected void handleTextMessage(IPPacket packet) {
+        TextMessage msg = TextMessage.decode(packet.data());
+        if (msg.isEncrypted()) {
+            log.rx("Encrypted message from " + packet.sourceIPAddress() + ": \"" + msg.text() + "\"");
+        } else {
+            log.rx("Message from " + packet.sourceIPAddress() + ": \"" + msg.text() + "\"");
         }
     }
 
@@ -202,11 +216,38 @@ public abstract class Node {
 
         return switch (cmd) {
             case "ping" -> { handlePingCommand(parts); yield true; }
+            case "msg" -> { handleMsgCommand(parts, false); yield true; }
+            case "emsg" -> { handleMsgCommand(parts, true); yield true; }
             case "help" -> { printHelp(); yield true; }
             case "info" -> { printInfo(); yield true; }
             case "quit", "exit" -> { System.exit(0); yield true; }
             default -> false;
         };
+    }
+
+    /**
+     * Handle the 'msg' or 'emsg' CLI command
+     */
+    private void handleMsgCommand(String[] parts, boolean encrypted) {
+        if (parts.length < 3) {
+            System.out.println("Usage: " + (encrypted ? "emsg" : "msg") + " <destIP> <text>");
+            return;
+        }
+
+        IPAddress destinationIPAddress = IPAddress.parse(parts[1]);
+
+        // Join remaining parts as the message text
+        StringBuilder sb = new StringBuilder();
+        for (int i = 2; i < parts.length; i++) {
+            if (i > 2) sb.append(" ");
+            sb.append(parts[i]);
+        }
+        String text = sb.toString();
+
+        TextMessage msg = encrypted ? TextMessage.encrypted(text) : TextMessage.plaintext(text);
+        IPPacket packet = IPPacket.data(networkInterfaceCard.ipAddress(), destinationIPAddress, msg.encode());
+        log.info("Sending " + (encrypted ? "encrypted" : "plaintext") + " message to " + destinationIPAddress + ": \"" + text + "\"");
+        sendIPPacket(packet);
     }
 
     /**
@@ -243,6 +284,8 @@ public abstract class Node {
     protected void printHelp() {
         System.out.println("\n--- " + name + " Commands ---");
         System.out.println("  ping <destIP> [count <n>]  - Send ping(s)");
+        System.out.println("  msg <destIP> <text>        - Send plaintext message");
+        System.out.println("  emsg <destIP> <text>       - Send encrypted message");
         System.out.println("  info                       - Show interface info");
         System.out.println("  help                       - Show this help");
         System.out.println("  quit                       - Exit");
