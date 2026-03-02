@@ -12,6 +12,6 @@ public record NetworkInterface (
 ) {
     @Override
     public String toString() {
-        return String.format("Network Interface Card[macAddress=%s ipAddress=%s lanID=%d portNumber=%d]", macAddress, ipAddress, lanID, devicePortNumber);
+        return String.format("Interface [MAC=%s | IP=%s | LAN%d | port %d]", macAddress, ipAddress, lanID, devicePortNumber);
     }
 }

@@ -83,6 +83,6 @@ public class PingMessage {
 
     @Override
     public String toString() {
-        return String.format("Ping Message: [%s sequenceNumber=%d timestamp=%d]", isRequest() ? "REQUEST" : "REPLY", sequence, timestamp);
+        return String.format("Ping %s seq=%d", isRequest() ? "REQUEST" : "REPLY", sequence);
     }
 }

@@ -111,7 +111,7 @@ class EthernetFrameTest {
         String str = frame.toString();
         assertTrue(str.contains("N1"));
         assertTrue(str.contains("R1"));
-        assertTrue(str.contains("10"));
+        assertTrue(str.contains("10 bytes"));
     }
 
     @Test

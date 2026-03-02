@@ -77,6 +77,7 @@ public class IPPacket {
 
     @Override
     public String toString() {
-        return String.format("IP Packet: [sourceIP=%s->destinationIP=%s protocol=%d length=%d]", sourceIPAddress, destinationIPAddress, protocol & 0xFF, data.length);
+        String protoName = (protocol == PROTOCOL_ICMP) ? "ICMP" : String.valueOf(protocol & 0xFF);
+        return String.format("Packet [%s -> %s | %s | %d bytes]", sourceIPAddress, destinationIPAddress, protoName, data.length);
     }
 }

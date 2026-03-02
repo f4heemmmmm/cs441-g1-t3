@@ -62,6 +62,6 @@ public final class EthernetFrame {
 
     @Override
     public String toString() {
-        return String.format("Ethernet Frame: [sourceMAC=%s->destinationMAC=%s length=%d]", sourceMACAddress, destinationMACAddress, data.length);
+        return String.format("Frame [%s -> %s | %d bytes]", sourceMACAddress, destinationMACAddress, data.length);
     }
 }

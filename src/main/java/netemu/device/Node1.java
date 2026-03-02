@@ -31,14 +31,14 @@ public class Node1 extends Node {
     protected void handleFrame(EthernetFrame frame) {
         // SNIFFING MODE - Log all frames
         if (sniffing && !frame.destinationMACAddress().equals(networkInterfaceCard.macAddress())) {
-            log.info("SNIFFING: " + frame);
+            log.info("[Sniffed] " + frame);
 
             try {
                 IPPacket packet = IPPacket.decode(frame.data());
-                log.info("  SNIFFING Payload Packet: " + packet);
+                log.info("  └─ " + packet);
                 if (packet.protocol() == IPPacket.PROTOCOL_ICMP) {
                     PingMessage ping = PingMessage.decode(packet.data());
-                    log.info("    SNIFFING Ping Message: " + ping);
+                    log.info("     └─ " + ping);
                 }
             } catch (Exception e) {
                 // Invalid IP packet, log the raw frame
@@ -55,7 +55,7 @@ public class Node1 extends Node {
         if (spoofing && spoofIPAddress != null) {
             // Replace source IP Address with spoofed IP Address
             IPPacket spoofedPacket = new IPPacket(spoofIPAddress, packet.destinationIPAddress(), packet.protocol(), packet.data());
-            log.warn("SPOOFING: Sending as " + spoofIPAddress + " instead of " + networkInterfaceCard.ipAddress());
+            log.warn("Spoofed packet: pretending to be " + spoofIPAddress + " (real IP: " + networkInterfaceCard.ipAddress() + ")");
             super.sendIPPacket(spoofedPacket);
         } else {
             super.sendIPPacket(packet);
@@ -85,7 +85,7 @@ public class Node1 extends Node {
                 if (parts.length >= 3) {
                     spoofIPAddress = IPAddress.parse(parts[2]);
                     spoofing = true;
-                    log.warn("Spoofing ENABLED - impersonating " + spoofIPAddress);
+                    log.warn("Spoofing ON — now impersonating " + spoofIPAddress);
                 } else {
                     System.out.println("Usage: Spoof on <IP>");
                 }
@@ -93,7 +93,7 @@ public class Node1 extends Node {
             case "off" -> {
                 spoofing = false;
                 spoofIPAddress= null;
-                log.info("Spoofing disabled");
+                log.info("Spoofing OFF — using real IP");
             }
             default -> System.out.println("Usage: Spoof on <IP> | spoof off");
         }
@@ -107,11 +107,11 @@ public class Node1 extends Node {
         switch (parts[1].toLowerCase()) {
             case "on" -> {
                 sniffing = true;
-                log.warn("Sniffing ENABLED");
+                log.warn("Sniffing ON — capturing all LAN" + networkInterfaceCard.lanID() + " traffic");
             }
             case "off" -> {
                 sniffing = false;
-                log.info("Sniffing DISABLED");
+                log.info("Sniffing OFF");
             }
             default -> System.out.println("Usage: sniff on | sniff off");
         }
@@ -125,7 +125,7 @@ public class Node1 extends Node {
         IPAddress destinationIPAddress = IPAddress.parse(parts[1]);
         int count = Integer.parseInt(parts[2]);
 
-        log.warn("PING FLOOD: Sending " + count + " pings to " + destinationIPAddress);
+        log.warn("Flood attack: sending " + count + " rapid pings to " + destinationIPAddress);
         for (int i = 0; i < count; i++) {
             PingMessage ping = PingMessage.request(i + 1);
             IPPacket packet = IPPacket.icmp(
@@ -133,7 +133,7 @@ public class Node1 extends Node {
                     destinationIPAddress, ping.encode());
             super.sendIPPacket(packet);
         }
-        log.warn("PING FLOOD: Sent " + count + " pings");
+        log.warn("Flood attack complete: " + count + " pings sent");
     }
 
     @Override

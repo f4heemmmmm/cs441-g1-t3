@@ -70,8 +70,8 @@ public class Node3 extends Node {
                     printFirewallHelp();
                 }
             }
-            case "on" -> { firewall.setEnabled(true); log.info("Firewall ENABLED"); }
-            case "off" -> { firewall.setEnabled(false); log.info("Firewall DISABLED"); }
+            case "on" -> { firewall.setEnabled(true); log.info("Firewall ON — filtering incoming packets"); }
+            case "off" -> { firewall.setEnabled(false); log.info("Firewall OFF — all packets allowed"); }
             case "status" -> firewall.printStatus();
             default -> printFirewallHelp();
         }

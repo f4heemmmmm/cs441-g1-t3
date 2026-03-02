@@ -25,7 +25,7 @@ class NetworkInterfaceTest {
         String str = nic.toString();
         assertTrue(str.contains("R2"));
         assertTrue(str.contains("0x21"));
-        assertTrue(str.contains("Card"));
+        assertTrue(str.contains("Interface"));
     }
 
     @Test

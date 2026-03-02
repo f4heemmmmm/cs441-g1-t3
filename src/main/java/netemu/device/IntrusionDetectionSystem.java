@@ -45,7 +45,7 @@ public class IntrusionDetectionSystem {
         // The LAN ID of the source IP Address should match the LAN ID of the incoming interface
         if (packet.sourceIPAddress().lanID() != incomingNetworkInterfaceCard.lanID()) {
             spoofAlerts.incrementAndGet();
-            log.security("IDS ALERT: Possible IP SPOOF detected! Packet from " + packet.sourceIPAddress() + " arrived on LAN" + incomingNetworkInterfaceCard.lanID() + " (expected LAN" + packet.sourceIPAddress().lanID() + ") via MAC " + frame.sourceMACAddress());
+            log.security("IDS Alert — IP spoof detected: " + packet.sourceIPAddress() + " claims LAN" + packet.sourceIPAddress().lanID() + " but arrived on LAN" + incomingNetworkInterfaceCard.lanID() + " (MAC: " + frame.sourceMACAddress() + ")");
             suspicious = true;
         }
 
@@ -56,7 +56,7 @@ public class IntrusionDetectionSystem {
                 FloodTracker tracker = pingTrackers.computeIfAbsent(packet.sourceIPAddress(), k -> new FloodTracker());
                 if (tracker.recordAndCheck()) {
                     floodAlerts.incrementAndGet();
-                    log.security("IDS ALERT: Ping FLOOD detected from " + packet.sourceIPAddress() +" (" + tracker.recentCount() + " pings in " + PING_FLOOD_WINDOW_MS + "ms)");
+                    log.security("IDS Alert — Ping flood detected: " + tracker.recentCount() + " pings from " + packet.sourceIPAddress() + " in " + PING_FLOOD_WINDOW_MS + "ms (threshold: " + PING_FLOOD_THRESHOLD + ")");
                     suspicious = true;
                 }
             }
@@ -64,7 +64,7 @@ public class IntrusionDetectionSystem {
 
         // In Active Mode, drop suspicious packets
         if (suspicious && activeMode) {
-            log.security("IDS ACTION: Dropping packet from " + packet.sourceIPAddress());
+            log.security("IDS Action — Dropped packet from " + packet.sourceIPAddress());
             return true;
         }
         return false;
@@ -95,8 +95,8 @@ public class IntrusionDetectionSystem {
     }
 
     public void printStatus() {
-        System.out.println("  IDS: " + (enabled ? "ENABLED" : "DISABLED"));
-        System.out.println("  Mode: " + (activeMode ? "ACTIVE (drop)" : "PASSIVE (log only)"));
+        System.out.println("  IDS:          " + (enabled ? "ON (monitoring)" : "OFF (disabled)"));
+        System.out.println("  Mode:         " + (activeMode ? "ACTIVE (log + drop)" : "PASSIVE (log only)"));
         System.out.println("  Spoof alerts: " + spoofAlerts.get());
         System.out.println("  Flood alerts: " + floodAlerts.get());
     }

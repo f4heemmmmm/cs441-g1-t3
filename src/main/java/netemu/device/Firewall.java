@@ -21,20 +21,20 @@ public class Firewall {
     // Add a source IP Address to the list of blocked source IP Addresses
     public void blockSourceIPAddress(IPAddress ipAddress) {
         blockedSourceIPAddressesList.add(ipAddress);
-        log.info("Firewall BLOCKED source IP Address: " + ipAddress);
+        log.info("Firewall rule added: block all packets from " + ipAddress);
     }
 
     // Remove a source IP Address from the list of blocked source IP Addresses
     public void unblockSourceIPAddress(IPAddress ipAddress) {
         blockedSourceIPAddressesList.remove(ipAddress);
-        log.info("Firewall UNBLOCKED source IP Address: " + ipAddress);
+        log.info("Firewall rule removed: unblocked " + ipAddress);
     }
 
     // Check if packet should be dropped based on blocked IP Addresses - Returns TRUE if blocked
     public boolean shouldBlock(IPPacket ipPacket) {
         if (!enabled) return false;
         if (blockedSourceIPAddressesList.contains(ipPacket.sourceIPAddress())) {
-            log.security("Firewall BLOCKED packet from " + ipPacket.sourceIPAddress() + " -> " + ipPacket.destinationIPAddress());
+            log.security("Firewall dropped packet: " + ipPacket.sourceIPAddress() + " -> " + ipPacket.destinationIPAddress());
             return true;
         }
         return false;
@@ -53,11 +53,11 @@ public class Firewall {
     }
 
     public void printStatus() {
-        System.out.println("  Firewall: " + (enabled ? "ENABLED" : "DISABLED"));
+        System.out.println("  Firewall:    " + (enabled ? "ON (filtering)" : "OFF (disabled)"));
         if (blockedSourceIPAddressesList.isEmpty()) {
-            System.out.println("  Block List: EMPTY");
+            System.out.println("  Blocked IPs: (none)");
         } else {
-            System.out.println("  Block List:");
+            System.out.println("  Blocked IPs:");
             for (IPAddress ipAddress : blockedSourceIPAddressesList) {
                 System.out.println("    - " + ipAddress);
             }

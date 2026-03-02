@@ -64,7 +64,7 @@ public class Router {
         byte[] data = msg.getBytes();
         DatagramPacket pkt = new DatagramPacket(data, data.length, LANAddress);
         socket.send(pkt);
-        log.info("Registered " + networkInterfaceCard.macAddress() + " with LAN" + networkInterfaceCard.lanID());
+        log.info("Registered interface " + networkInterfaceCard.macAddress() + " on LAN" + networkInterfaceCard.lanID());
     }
 
     private void startReceiver(DatagramSocket socket, NetworkInterface networkInterfaceCard, String threadName) {
@@ -79,7 +79,7 @@ public class Router {
                     EthernetFrame frame = EthernetFrame.decode(data);
                     handleFrame(frame, networkInterfaceCard);
                 } catch (Exception e) {
-                    log.error("Receive error on " + networkInterfaceCard.macAddress() + ": " + e.getMessage());
+                    log.error("Failed to receive on " + networkInterfaceCard.macAddress() + ": " + e.getMessage());
                 }
             }
         }, threadName);
@@ -94,6 +94,8 @@ public class Router {
         }
 
         IPPacket packet = IPPacket.decode(frame.data());
+        log.rx(frame + " on " + incomingNetworkInterfaceCard.macAddress());
+        log.rx("  └─ " + packet);
 
         // IDS Inspection
         if (IDS.isEnabled()) {
@@ -118,25 +120,25 @@ public class Router {
         if (packet.protocol() == IPPacket.PROTOCOL_ICMP) {
             PingMessage ping = PingMessage.decode(packet.data());
             if (ping.isRequest()) {
-                log.rx("ping request from " + packet.sourceIPAddress() + " sequence=" + ping.sequence() + " on " + incomingNetworkInterfaceCard.macAddress());
+                log.rx("Ping request from " + packet.sourceIPAddress() + " (seq=" + ping.sequence() + ") on interface " + incomingNetworkInterfaceCard.macAddress());
                 
                 // Reply from the interface that received the packet
                 PingMessage reply = ping.toReply();
                 IPPacket replyPacket = IPPacket.icmp(incomingNetworkInterfaceCard.ipAddress(), packet.sourceIPAddress(), reply.encode());
                 sendToLAN(replyPacket, incomingNetworkInterfaceCard);
             } else {
-                log.rx("Ping reply from " + packet.sourceIPAddress() + " sequence=" + ping.sequence());
+                log.rx("Ping reply from " + packet.sourceIPAddress() + " (seq=" + ping.sequence() + ")");
             }
         }
     }
 
     private void forwardPacket(IPPacket packet, NetworkInterface incomingNetworkInterfaceCard) {
         int destinationLAN = packet.destinationIPAddress().lanID();
-        log.info("Forwarding " + packet.sourceIPAddress() + " -> " + packet.destinationIPAddress() + " to LAN" + destinationLAN);
+        log.info("Routing: " + packet.sourceIPAddress() + " -> " + packet.destinationIPAddress() + " via LAN" + destinationLAN);
 
         NetworkInterface outgoingNetworkInterfaceCard = networkInterfaceCardForLAN(destinationLAN);
         if (outgoingNetworkInterfaceCard == null) {
-            log.error("No interface for LAN" + destinationLAN);
+            log.error("Cannot route: no interface for LAN" + destinationLAN);
             return;
         }
 
@@ -152,8 +154,9 @@ public class Router {
             DatagramPacket udp = new DatagramPacket(data, data.length, target);
             socketForNic(outgoingNetworkInterfaceCard).send(udp);
             log.tx(frame.toString());
+            log.tx("  └─ " + packet);
         } catch (Exception e) {
-            log.error("Forward failed: " + e.getMessage());
+            log.error("Failed to forward packet: " + e.getMessage());
         }
     }
 
@@ -204,7 +207,7 @@ public class Router {
                         default -> System.out.println("Unknown command. Type 'help'.");
                     }
                 } catch (Exception e) {
-                    log.error("Command error: " + e.getMessage());
+                    log.error("Invalid command: " + e.getMessage());
                 }
             }
         }
@@ -228,7 +231,7 @@ public class Router {
         int destinationLAN = destinationIPAddress.lanID();
         NetworkInterface outgoingNetworkInterfaceCard = networkInterfaceCardForLAN(destinationLAN);
         if (outgoingNetworkInterfaceCard == null) {
-            log.error("Cannot reach LAN" + destinationLAN);
+            log.error("Cannot reach destination on LAN" + destinationLAN);
             return;
         }
 
@@ -249,12 +252,12 @@ public class Router {
             return;
         }
         switch (parts[1].toLowerCase()) {
-            case "on" -> { IDS.setEnabled(true); log.info("IDS ENABLED"); }
-            case "off" -> { IDS.setEnabled(false); log.info("IDS DISABLED"); }
+            case "on" -> { IDS.setEnabled(true); log.info("IDS ON — monitoring traffic"); }
+            case "off" -> { IDS.setEnabled(false); log.info("IDS OFF — no monitoring"); }
             case "mode" -> {
                 if (parts.length >= 3) {
                     IDS.setActiveMode("active".equalsIgnoreCase(parts[2]));
-                    log.info("IDS mode: " + (IDS.isActiveMode() ? "ACTIVE" : "PASSIVE"));
+                    log.info("IDS mode: " + (IDS.isActiveMode() ? "ACTIVE (drop suspicious)" : "PASSIVE (log only)"));
                 } else {
                     System.out.println("Usage: IDS mode <active|passive>");
                 }

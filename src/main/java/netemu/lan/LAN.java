@@ -55,14 +55,14 @@ public class LAN {
             int devicePortNumber = Integer.parseInt(parts[2]);
             InetSocketAddress endpoint = new InetSocketAddress(InetAddress.getLoopbackAddress(), devicePortNumber);
             endpoints.put(mac, endpoint);
-            log.info("Registered " + mac + " at port " + devicePortNumber);
+            log.info("Device " + mac + " joined (port " + devicePortNumber + ")");
         }
     }
 
     private void handleFrame(byte[] data, InetSocketAddress senderAddress, DatagramSocket socket) {
         try {
             EthernetFrame frame = EthernetFrame.decode(data);
-            log.rx(frame.toString());
+            log.rx("Received " + frame);
 
             String srcMac = frame.sourceMACAddress().value();
             for (var entry : endpoints.entrySet()) {
@@ -70,11 +70,11 @@ public class LAN {
                     InetSocketAddress target = entry.getValue();
                     DatagramPacket out = new DatagramPacket(data, data.length, target);
                     socket.send(out);
-                    log.info("  -> forwarded to " + entry.getKey() + " at port " + target.getPort());
+                    log.info("  -> forwarded to " + entry.getKey() + " (port " + target.getPort() + ")");
                 }
             }
         } catch (Exception e) {
-            log.error("Failed to process frame: " + e.getMessage());
+            log.error("Failed to broadcast frame: " + e.getMessage());
         }
     }
 

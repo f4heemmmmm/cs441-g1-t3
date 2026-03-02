@@ -118,6 +118,7 @@ class IPPacketTest {
         String str = packet.toString();
         assertTrue(str.contains("0x12"));
         assertTrue(str.contains("0x22"));
+        assertTrue(str.contains("ICMP"));
     }
 
     @Test

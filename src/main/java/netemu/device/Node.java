@@ -39,8 +39,8 @@ public abstract class Node {
         socket = new DatagramSocket(networkInterfaceCard.devicePortNumber());
         lanEmulatorAddress = new InetSocketAddress(InetAddress.getLoopbackAddress(), networkInterfaceCard.lanEmulatorPortNumber());
 
-        Ansi.banner(name + " [MAC Address = " + networkInterfaceCard.macAddress() + " IP Address = " + networkInterfaceCard.ipAddress() + " LAN" + networkInterfaceCard.lanID() + "]", logColor());
-        log.info("Bound to Port Number: " + networkInterfaceCard.devicePortNumber());
+        Ansi.banner(name + " | MAC: " + networkInterfaceCard.macAddress() + " | IP: " + networkInterfaceCard.ipAddress() + " | LAN" + networkInterfaceCard.lanID(), logColor());
+        log.info("Listening on port " + networkInterfaceCard.devicePortNumber());
 
         register();
         startReceiver();
@@ -63,7 +63,7 @@ public abstract class Node {
 
         // Send registration so the emulator can map the  MAC Address to the node's Port Number
         socket.send(packet);
-        log.info("Registered with LAN" + networkInterfaceCard.lanID() + " emulator");
+        log.info("Connected to LAN" + networkInterfaceCard.lanID() + " emulator");
     }
 
     private void startReceiver() {
@@ -103,6 +103,8 @@ public abstract class Node {
     protected void processFrame(EthernetFrame frame) {
         // Decode the Ethernet frame payload into an IP packet and dispatch it for handling
         IPPacket packet = IPPacket.decode(frame.data());
+        log.rx(frame.toString());
+        log.rx("  └─ " + packet);
         handleIPPacket(packet, frame);
     }
 
@@ -122,7 +124,7 @@ public abstract class Node {
         PingMessage ping = PingMessage.decode(packet.data());
 
          if (ping.isRequest()) {
-            log.rx("Ping REQUEST from " + packet.sourceIPAddress() + " sequenceNumber=" + ping.sequence());
+            log.rx("Ping request from " + packet.sourceIPAddress() + " (seq=" + ping.sequence() + ")");
 
             // Send reply
             PingMessage reply = ping.toReply();
@@ -130,7 +132,7 @@ public abstract class Node {
             sendIPPacket(replyPacket);
         } else if (ping.isReply()) {
             long rtt = ping.RTT();
-            log.rx("Ping REPLY from " + packet.sourceIPAddress() + " sequenceNumber=" + ping.sequence() + " RTT=" + rtt + "ms");
+            log.rx("Ping reply from " + packet.sourceIPAddress() + " (seq=" + ping.sequence() + ", RTT=" + rtt + "ms)");
         }
     }
 
@@ -154,7 +156,7 @@ public abstract class Node {
             EthernetFrame frame = new EthernetFrame(networkInterfaceCard.macAddress(), destinationMACAddress, packet.encode());
             sendFrame(frame, lanEmulatorAddress);
         } catch (Exception e) {
-            log.error("Send failed: " + e.getMessage());
+            log.error("Failed to send packet: " + e.getMessage());
         }
     }
 
@@ -166,6 +168,7 @@ public abstract class Node {
         DatagramPacket packet = new DatagramPacket(data, data.length, targetAddress);
         socket.send(packet);
         log.tx(frame.toString());
+        log.tx("  └─ " + IPPacket.decode(frame.data()));
     }
 
     /**
@@ -183,7 +186,7 @@ public abstract class Node {
                         System.out.println("Unknown command. Type 'help' for available commands.");
                     }
                 } catch (Exception e) {
-                    log.error("Command Error: " + e.getMessage());
+                    log.error("Invalid command: " + e.getMessage());
                 }
             }
         }
