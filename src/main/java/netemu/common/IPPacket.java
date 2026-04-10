@@ -11,6 +11,7 @@ public class IPPacket {
     public static final int MAX_DATA_LENGTH = 256;
     public static final byte PROTOCOL_ICMP = 0x01;
     public static final byte PROTOCOL_DATA = 0x02;
+    public static final byte PROTOCOL_DHCP = 0x03;
 
     private final byte[] data;
     private final byte protocol;
@@ -35,6 +36,11 @@ public class IPPacket {
     // Create a data/text packet
     public static IPPacket data(IPAddress sourceIPAddress, IPAddress destinationIPAddress, byte[] messageData) {
         return new IPPacket(sourceIPAddress, destinationIPAddress, PROTOCOL_DATA, messageData);
+    }
+
+    // Create a DHCP packet
+    public static IPPacket dhcp(IPAddress sourceIPAddress, IPAddress destinationIPAddress, byte[] dhcpData) {
+        return new IPPacket(sourceIPAddress, destinationIPAddress, PROTOCOL_DHCP, dhcpData);
     }
 
     // Encode IP Packet into raw packet bytes (byte array)
@@ -86,6 +92,7 @@ public class IPPacket {
         String protoName = switch (protocol) {
             case PROTOCOL_ICMP -> "ICMP";
             case PROTOCOL_DATA -> "DATA";
+            case PROTOCOL_DHCP -> "DHCP";
             default -> String.valueOf(protocol & 0xFF);
         };
         return String.format("Packet [%s -> %s | %s | %d bytes]", sourceIPAddress, destinationIPAddress, protoName, data.length);

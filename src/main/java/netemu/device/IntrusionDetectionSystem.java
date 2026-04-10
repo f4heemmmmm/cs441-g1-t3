@@ -9,7 +9,9 @@ import java.util.concurrent.atomic.AtomicInteger;
  * Intrusion Detection System (IDS) for the router.
  * Detects:
  *  1. IP Spoofing (cross-LAN): Source IP doesn't match expected LAN for incoming interface
- *  2. MAC-IP Mismatch (same-LAN): Source MAC doesn't match expected MAC for source IP
+ *  2. MAC-IP Mismatch (same-LAN): Source MAC doesn't match expected MAC for source IP,
+ *     verified against a snooped binding table populated from observed DHCPACK messages
+ *     (real-world DHCP snooping behaviour)
  *  3. Ping Flood: Too many pings from the same source in a certain time window
  *
  * Modes:
@@ -29,6 +31,11 @@ public class IntrusionDetectionSystem {
     private final AtomicInteger floodAlerts = new AtomicInteger(0);
     private final AtomicInteger macIpAlerts = new AtomicInteger(0);
     private final ConcurrentHashMap<IPAddress, FloodTracker> pingTrackers = new ConcurrentHashMap<>();
+
+    // Snooped MAC -> IP bindings learned from DHCPACK messages flowing through the router.
+    // This is the IDS's own ground truth — it does not consult AddressTable, mirroring
+    // how a real DHCP-snooping switch maintains its own binding table.
+    private final ConcurrentHashMap<MACAddress, IPAddress> snoopedBindings = new ConcurrentHashMap<>();
 
     public IntrusionDetectionSystem(Log log) {
         this.log = log;
@@ -52,16 +59,26 @@ public class IntrusionDetectionSystem {
         }
 
         // Check 2: MAC-IP Binding Verification (same-LAN spoof detection)
-        // Verify that the source MAC matches the expected MAC for the source IP
-        try {
-            MACAddress expectedMAC = AddressTable.resolve(packet.sourceIPAddress());
-            if (!expectedMAC.equals(frame.sourceMACAddress())) {
-                macIpAlerts.incrementAndGet();
-                log.security("IDS Alert — MAC-IP mismatch: " + frame.sourceMACAddress() + " sent packet with source IP " + packet.sourceIPAddress() + " (expected MAC: " + expectedMAC + ")");
-                suspicious = true;
+        // Look up the source MAC in the snooped binding table. If we have learned
+        // a lease for this MAC and the source IP doesn't match, that's a spoof.
+        // Conversely, if we see a *different* MAC sourcing an IP we know is leased
+        // to someone else, that's also a spoof (the more interesting case for
+        // attackers like Node1 using Node2's IP).
+        IPAddress snoopedIP = snoopedBindings.get(frame.sourceMACAddress());
+        if (snoopedIP != null && !snoopedIP.equals(packet.sourceIPAddress())) {
+            macIpAlerts.incrementAndGet();
+            log.security("IDS Alert — MAC-IP mismatch: " + frame.sourceMACAddress() + " sent packet with source IP " + packet.sourceIPAddress() + " (snooped lease: " + snoopedIP + ")");
+            suspicious = true;
+        } else {
+            // Check the reverse: is some other MAC currently leased the source IP?
+            for (var entry : snoopedBindings.entrySet()) {
+                if (entry.getValue().equals(packet.sourceIPAddress()) && !entry.getKey().equals(frame.sourceMACAddress())) {
+                    macIpAlerts.incrementAndGet();
+                    log.security("IDS Alert — MAC-IP mismatch: " + frame.sourceMACAddress() + " sent packet with source IP " + packet.sourceIPAddress() + " (lease belongs to MAC: " + entry.getKey() + ")");
+                    suspicious = true;
+                    break;
+                }
             }
-        } catch (IllegalArgumentException e) {
-            // Unknown IP, skip MAC-IP check
         }
 
         // Check 3: Ping Flood Detection
@@ -83,6 +100,30 @@ public class IntrusionDetectionSystem {
             return true;
         }
         return false;
+    }
+
+    /**
+     * Record a DHCP lease observed flowing through the router. Called by the router
+     * whenever the local DHCP server emits an ACK. The IDS uses these snooped
+     * bindings as ground truth for MAC-IP verification.
+     */
+    public void recordDHCPLease(MACAddress mac, IPAddress ip) {
+        snoopedBindings.put(mac, ip);
+        log.info("IDS snoop: learned " + mac + " -> " + ip);
+    }
+
+    /**
+     * Forget a snooped binding (e.g., on lease release).
+     */
+    public void forgetDHCPLease(MACAddress mac) {
+        IPAddress removed = snoopedBindings.remove(mac);
+        if (removed != null) {
+            log.info("IDS snoop: forgot " + mac + " -> " + removed);
+        }
+    }
+
+    public int snoopedBindingCount() {
+        return snoopedBindings.size();
     }
 
     public void setEnabled(boolean enabled) {
@@ -116,6 +157,10 @@ public class IntrusionDetectionSystem {
     public void printStatus() {
         System.out.println("  IDS:            " + (enabled ? "ON (monitoring)" : "OFF (disabled)"));
         System.out.println("  Mode:           " + (activeMode ? "ACTIVE (log + drop)" : "PASSIVE (log only)"));
+        System.out.println("  Snooped leases: " + snoopedBindings.size());
+        for (var entry : snoopedBindings.entrySet()) {
+            System.out.println("    " + entry.getKey() + " -> " + entry.getValue());
+        }
         System.out.println("  Spoof alerts:   " + spoofAlerts.get());
         System.out.println("  MAC-IP alerts:  " + macIpAlerts.get());
         System.out.println("  Flood alerts:   " + floodAlerts.get());

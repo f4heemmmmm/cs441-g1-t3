@@ -8,6 +8,7 @@ import java.net.DatagramPacket;
 import java.net.DatagramSocket;
 import java.net.InetSocketAddress;
 
+import java.util.Optional;
 import java.util.Scanner;
 
 /**
@@ -33,6 +34,8 @@ public class Router {
 
     private IntrusionDetectionSystem IDS;
 
+    private DHCPServer dhcpServer1, dhcpServer2, dhcpServer3;
+
     public void start() throws IOException {
         Ansi.banner("Router [R1/R2/R3]", Ansi.PURPLE);
 
@@ -46,6 +49,10 @@ public class Router {
         socket3 = new DatagramSocket(AddressTable.ROUTER3_PORT);
 
         IDS = new IntrusionDetectionSystem(log);
+
+        dhcpServer1 = new DHCPServer(1, AddressTable.IP_R1, log);
+        dhcpServer2 = new DHCPServer(2, AddressTable.IP_R2, log);
+        dhcpServer3 = new DHCPServer(3, AddressTable.IP_R3, log);
 
         register(socket1, LAN1Address, networkInterfaceCardRouter1);
         register(socket2, LAN2Address, networkInterfaceCardRouter2);
@@ -83,7 +90,9 @@ public class Router {
                 }
             }
         }, threadName);
-        t.setDaemon(true);
+        // Non-daemon: receivers are the router's reason for existing. Stays alive
+        // through stdin EOF and only exits via explicit kill or `quit`.
+        t.setDaemon(false);
         t.start();
     }
 
@@ -95,7 +104,15 @@ public class Router {
 
         IPPacket packet = IPPacket.decode(frame.data());
         log.rx(frame + " on " + incomingNetworkInterfaceCard.macAddress());
-        log.rx("  └─ " + packet);
+        log.info("  └─ " + packet);
+
+        // DHCP traffic is handled by the per-LAN DHCP server before any IDS or
+        // routing logic. DHCP frames are broadcast and not "addressed to" the
+        // router in the conventional sense.
+        if (packet.protocol() == IPPacket.PROTOCOL_DHCP) {
+            handleDHCP(packet, incomingNetworkInterfaceCard);
+            return;
+        }
 
         // IDS Inspection
         if (IDS.isEnabled()) {
@@ -110,6 +127,62 @@ public class Router {
         } else {
             forwardPacket(packet, incomingNetworkInterfaceCard);
         }
+    }
+
+    private void handleDHCP(IPPacket packet, NetworkInterface incomingNetworkInterfaceCard) {
+        DHCPMessage msg;
+        try {
+            msg = DHCPMessage.decode(packet.data());
+        } catch (Exception e) {
+            log.error("Failed to decode DHCP message: " + e.getMessage());
+            return;
+        }
+        log.info("     └─ " + msg);
+
+        DHCPServer server = dhcpServerForLAN(incomingNetworkInterfaceCard.lanID());
+        if (server == null) {
+            log.error("No DHCP server for LAN" + incomingNetworkInterfaceCard.lanID());
+            return;
+        }
+
+        Optional<DHCPMessage> response = server.handle(msg);
+
+        // Snooping: also tell the IDS about lease churn so it can verify future
+        // packets against the bindings the server has actually issued/released.
+        if (msg.isRelease()) {
+            IDS.forgetDHCPLease(msg.clientMAC());
+        }
+
+        if (response.isEmpty()) return;
+
+        DHCPMessage reply = response.get();
+        if (reply.isAck()) {
+            IDS.recordDHCPLease(reply.clientMAC(), reply.yourIP());
+        }
+        // The client may not yet have an IP, so the reply is sent to the broadcast
+        // IP and addressed to the client's MAC at the link layer.
+        IPPacket replyPacket = IPPacket.dhcp(incomingNetworkInterfaceCard.ipAddress(), DHCPMessage.BROADCAST_IP, reply.encode());
+        try {
+            EthernetFrame frame = new EthernetFrame(incomingNetworkInterfaceCard.macAddress(), reply.clientMAC(), replyPacket.encode());
+            byte[] data = frame.encode();
+            InetSocketAddress target = LANAddressforNetworkInterfaceCard(incomingNetworkInterfaceCard);
+            DatagramPacket udp = new DatagramPacket(data, data.length, target);
+            socketForNic(incomingNetworkInterfaceCard).send(udp);
+            log.tx(frame.toString());
+            log.info("  └─ " + replyPacket);
+            log.info("     └─ " + reply);
+        } catch (Exception e) {
+            log.error("Failed to send DHCP reply: " + e.getMessage());
+        }
+    }
+
+    private DHCPServer dhcpServerForLAN(int lanID) {
+        return switch (lanID) {
+            case 1 -> dhcpServer1;
+            case 2 -> dhcpServer2;
+            case 3 -> dhcpServer3;
+            default -> null;
+        };
     }
 
     private boolean isOurIp(IPAddress ipAddress) {
@@ -147,14 +220,19 @@ public class Router {
 
     private void sendToLAN(IPPacket packet, NetworkInterface outgoingNetworkInterfaceCard) {
         try {
-            MACAddress destinationMACAddress = AddressTable.resolve(packet.destinationIPAddress());
+            Optional<MACAddress> resolved = AddressTable.resolve(packet.destinationIPAddress());
+            if (resolved.isEmpty()) {
+                log.error("Cannot route packet to " + packet.destinationIPAddress() + " — no MAC binding known");
+                return;
+            }
+            MACAddress destinationMACAddress = resolved.get();
             EthernetFrame frame = new EthernetFrame(outgoingNetworkInterfaceCard.macAddress(), destinationMACAddress, packet.encode());
             byte[] data = frame.encode();
             InetSocketAddress target = LANAddressforNetworkInterfaceCard(outgoingNetworkInterfaceCard);
             DatagramPacket udp = new DatagramPacket(data, data.length, target);
             socketForNic(outgoingNetworkInterfaceCard).send(udp);
             log.tx(frame.toString());
-            log.tx("  └─ " + packet);
+            log.info("  └─ " + packet);
         } catch (Exception e) {
             log.error("Failed to forward packet: " + e.getMessage());
         }

@@ -37,23 +37,45 @@ class AddressTableTest {
 
     @Test
     void resolveNodeIPs() {
-        assertEquals(AddressTable.MAC_N1, AddressTable.resolve(AddressTable.IP_N1));
-        assertEquals(AddressTable.MAC_N2, AddressTable.resolve(AddressTable.IP_N2));
-        assertEquals(AddressTable.MAC_N3, AddressTable.resolve(AddressTable.IP_N3));
-        assertEquals(AddressTable.MAC_N4, AddressTable.resolve(AddressTable.IP_N4));
+        assertEquals(AddressTable.MAC_N1, AddressTable.resolve(AddressTable.IP_N1).orElseThrow());
+        assertEquals(AddressTable.MAC_N2, AddressTable.resolve(AddressTable.IP_N2).orElseThrow());
+        assertEquals(AddressTable.MAC_N3, AddressTable.resolve(AddressTable.IP_N3).orElseThrow());
+        assertEquals(AddressTable.MAC_N4, AddressTable.resolve(AddressTable.IP_N4).orElseThrow());
     }
 
     @Test
     void resolveRouterIPs() {
-        assertEquals(AddressTable.MAC_R1, AddressTable.resolve(AddressTable.IP_R1));
-        assertEquals(AddressTable.MAC_R2, AddressTable.resolve(AddressTable.IP_R2));
-        assertEquals(AddressTable.MAC_R3, AddressTable.resolve(AddressTable.IP_R3));
+        assertEquals(AddressTable.MAC_R1, AddressTable.resolve(AddressTable.IP_R1).orElseThrow());
+        assertEquals(AddressTable.MAC_R2, AddressTable.resolve(AddressTable.IP_R2).orElseThrow());
+        assertEquals(AddressTable.MAC_R3, AddressTable.resolve(AddressTable.IP_R3).orElseThrow());
     }
 
     @Test
-    void resolveUnknownIPThrows() {
-        assertThrows(IllegalArgumentException.class,
-                () -> AddressTable.resolve(new IPAddress(0xFF)));
+    void resolveUnknownIPReturnsEmpty() {
+        assertTrue(AddressTable.resolve(new IPAddress(0xFF)).isEmpty());
+    }
+
+    @Test
+    void bindAndUnbindUpdateResolution() {
+        IPAddress ip = new IPAddress(0x1F);
+        MACAddress mac = new MACAddress("X1");
+        try {
+            AddressTable.bind(ip, mac, 1);
+            assertEquals(mac, AddressTable.resolve(ip).orElseThrow());
+            assertEquals(1, AddressTable.getLANForIP(ip));
+        } finally {
+            AddressTable.unbind(ip);
+        }
+        assertTrue(AddressTable.resolve(ip).isEmpty());
+    }
+
+    @Test
+    void lanPoolReturnsExpectedRange() {
+        var pool1 = AddressTable.lanPool(1);
+        // 0x12..0x1F inclusive — 14 addresses, 0x_0 unused and 0x_1 reserved for router
+        assertEquals(14, pool1.size());
+        assertEquals(0x12, pool1.get(0).value());
+        assertEquals(0x1F, pool1.get(pool1.size() - 1).value());
     }
 
     @Test

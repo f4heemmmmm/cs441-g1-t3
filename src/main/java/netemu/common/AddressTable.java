@@ -1,9 +1,13 @@
 package netemu.common;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
+import java.util.Optional;
+import java.util.concurrent.ConcurrentHashMap;
 
 public final class AddressTable {
-    
+
     private AddressTable() {}
 
     // Port Numbers - LAN EMULATORS
@@ -33,13 +37,13 @@ public final class AddressTable {
     public static final MACAddress MAC_R2 = new MACAddress("R2");
     public static final MACAddress MAC_R3 = new MACAddress("R3");
 
-    // IP Addresses - NODES
+    // Default IP Addresses - NODES (used for static mode and as legacy defaults)
     public static final IPAddress IP_N1 = new IPAddress(0x12);
     public static final IPAddress IP_N2 = new IPAddress(0x13);
     public static final IPAddress IP_N3 = new IPAddress(0x22);
     public static final IPAddress IP_N4 = new IPAddress(0x32);
 
-    // IP Addresses - ROUTERS
+    // IP Addresses - ROUTERS (infrastructure, always reserved)
     public static final IPAddress IP_R1 = new IPAddress(0x11);
     public static final IPAddress IP_R2 = new IPAddress(0x21);
     public static final IPAddress IP_R3 = new IPAddress(0x31);
@@ -51,35 +55,26 @@ public final class AddressTable {
         3, LAN3_PORT
     );
 
-    // Maps IP Address to MAC Address (for lookup, similar to ARP resolution)
-    private static final Map<IPAddress, MACAddress> IP_TO_MAC = Map.of(
-        // NODES
-        IP_N1, MAC_N1,
-        IP_N2, MAC_N2,
-        IP_N3, MAC_N3,
-        IP_N4, MAC_N4,
+    // Mutable IP -> MAC table. Routers are seeded statically; nodes are populated either
+    // by the legacy seed below (static mode) or by DHCP at runtime.
+    private static final Map<IPAddress, MACAddress> IP_TO_MAC = new ConcurrentHashMap<>();
 
-        // ROUTERS
-        IP_R1, MAC_R1,
-        IP_R2, MAC_R2,
-        IP_R3, MAC_R3
-    );
+    // Mutable IP -> LAN ID table. Same seeding rules as IP_TO_MAC.
+    private static final Map<IPAddress, Integer> IP_TO_LAN = new ConcurrentHashMap<>();
 
-    // Maps each interface IP Address to the LAN segment (by the LAN ID) it belongs to
-    private static final Map<IPAddress, Integer> IP_TO_LAN = Map.of(
-        // LAN 1 contains NODE 1, NODE 2 and ROUTER 1
-        IP_N1, 1,
-        IP_N2, 1,
-        IP_R1, 1,
+    static {
+        // Routers always present — they are infrastructure, never DHCP-assigned
+        bind(IP_R1, MAC_R1, 1);
+        bind(IP_R2, MAC_R2, 2);
+        bind(IP_R3, MAC_R3, 3);
 
-        // LAN 2 contains NODE 3 and ROUTER 2
-        IP_N3, 2,
-        IP_R2, 2,
-
-        // LAN 3 contains NODE 4 and ROUTER 3
-        IP_N4, 3,
-        IP_R3, 3
-    );
+        // Default node bindings for static mode. DHCP clients will rebind these
+        // to whatever address they actually receive in their lease.
+        bind(IP_N1, MAC_N1, 1);
+        bind(IP_N2, MAC_N2, 1);
+        bind(IP_N3, MAC_N3, 2);
+        bind(IP_N4, MAC_N4, 3);
+    }
 
     // Get the LAN emulator port number for a LAN ID
     public static int getLANPortNumber(int lanID) {
@@ -88,14 +83,14 @@ public final class AddressTable {
         return port;
     }
 
-    // Resolve an IP Address to a MAC Address 
-    public static MACAddress resolve(IPAddress ipAddress) {
-        MACAddress macAddress = IP_TO_MAC.get(ipAddress);
-        if (macAddress == null) throw new IllegalArgumentException("Unknown IP: " + ipAddress);
-        return macAddress;
+    // Resolve an IP Address to a MAC Address.
+    // Returns Optional.empty() if no binding is currently known (e.g., a DHCP client
+    // has not yet been assigned an address).
+    public static Optional<MACAddress> resolve(IPAddress ipAddress) {
+        return Optional.ofNullable(IP_TO_MAC.get(ipAddress));
     }
 
-    // Get the which LAN the IP Address belongs to
+    // Get which LAN the IP Address belongs to
     public static int getLANForIP(IPAddress ipAddress) {
         Integer lan = IP_TO_LAN.get(ipAddress);
         if (lan == null) throw new IllegalArgumentException("Unknown IP: " + ipAddress);
@@ -120,5 +115,32 @@ public final class AddressTable {
             case 3 -> IP_R3;
             default -> throw new IllegalArgumentException("Unknown LAN ID: " + lanID);
         };
+    }
+
+    // Add or update an IP -> MAC binding. Called by DHCP clients on lease ACK
+    // and by the DHCP server when issuing a lease.
+    public static void bind(IPAddress ipAddress, MACAddress macAddress, int lanID) {
+        IP_TO_MAC.put(ipAddress, macAddress);
+        IP_TO_LAN.put(ipAddress, lanID);
+    }
+
+    // Remove an IP binding. Called on lease release or expiry.
+    public static void unbind(IPAddress ipAddress) {
+        IP_TO_MAC.remove(ipAddress);
+        IP_TO_LAN.remove(ipAddress);
+    }
+
+    // Allowable client IP pool for a LAN. The high nibble is the LAN id; the low
+    // nibble runs from 0x2..0xF (0x_0 is reserved as "unassigned" and 0x_1 is the
+    // router gateway). Returns a fresh, mutable list each call.
+    public static List<IPAddress> lanPool(int lanID) {
+        if (lanID < 1 || lanID > 0xF) {
+            throw new IllegalArgumentException("Unknown LAN ID: " + lanID);
+        }
+        List<IPAddress> pool = new ArrayList<>();
+        for (int low = 0x2; low <= 0xF; low++) {
+            pool.add(new IPAddress((lanID << 4) | low));
+        }
+        return pool;
     }
 }

@@ -2,6 +2,7 @@ package netemu.device;
 
 import netemu.common.*;
 
+import java.util.Optional;
 import java.util.Scanner;
 
 import java.io.IOException;
@@ -11,12 +12,13 @@ import java.net.DatagramSocket;
 import java.net.InetSocketAddress;
 
 public abstract class Node {
-    
+
     protected final Log log;
     protected final String name;
     protected DatagramSocket socket;
     protected InetSocketAddress lanEmulatorAddress;
     protected final NetworkInterface networkInterfaceCard;
+    protected DHCPClient dhcpClient; // non-null only when running in DHCP mode
 
     protected Node(String name, NetworkInterface networkInterfaceCard, String color) {
         this.name = name;
@@ -29,21 +31,53 @@ public abstract class Node {
     }
 
     /**
-     * Starts the node by:
-     *  1. Binding socket
-     *  2. Registering with the LAN Emulator
-     *  3. Starting the receiver thread
-     *  4. Starting the CLI
+     * Starts the node in static (legacy) mode — IP is whatever was passed at construction.
      */
     public void start() throws IOException {
+        start(false);
+    }
+
+    /**
+     * Starts the node, optionally acquiring its IP via DHCP.
+     *
+     * Static mode order: bind socket → REGISTER → start receiver → CLI
+     * DHCP mode order:   bind socket → clear static IP → REGISTER → start receiver
+     *                    → run DHCP client → CLI
+     *
+     * REGISTER must run before the DHCP handshake so the LAN emulator knows where
+     * to fan-out broadcast frames addressed to this node's MAC.
+     */
+    public void start(boolean useDHCP) throws IOException {
         socket = new DatagramSocket(networkInterfaceCard.devicePortNumber());
         lanEmulatorAddress = new InetSocketAddress(InetAddress.getLoopbackAddress(), networkInterfaceCard.lanEmulatorPortNumber());
 
-        Ansi.banner(name + " | MAC: " + networkInterfaceCard.macAddress() + " | IP: " + networkInterfaceCard.ipAddress() + " | LAN" + networkInterfaceCard.lanID(), logColor());
+        if (useDHCP) {
+            // Clear any static seed for this node's default IP so the DHCP server's
+            // pool is not polluted by the legacy binding.
+            if (networkInterfaceCard.hasIP()) {
+                AddressTable.unbind(networkInterfaceCard.ipAddress());
+                networkInterfaceCard.releaseIP();
+            }
+            dhcpClient = new DHCPClient(networkInterfaceCard, socket, lanEmulatorAddress, log);
+        }
+
+        String ipStr = networkInterfaceCard.hasIP() ? networkInterfaceCard.ipAddress().toString() : "(pending DHCP)";
+        Ansi.banner(name + " | MAC: " + networkInterfaceCard.macAddress() + " | IP: " + ipStr + " | LAN" + networkInterfaceCard.lanID(), logColor());
         log.info("Listening on port " + networkInterfaceCard.devicePortNumber());
 
         register();
         startReceiver();
+
+        if (useDHCP) {
+            log.info("DHCP: requesting lease...");
+            boolean leased = dhcpClient.acquireLease();
+            if (!leased) {
+                log.error("DHCP: failed to acquire a lease after retries — exiting");
+                System.exit(1);
+            }
+            Ansi.banner(name + " | MAC: " + networkInterfaceCard.macAddress() + " | IP: " + networkInterfaceCard.ipAddress() + " | LAN" + networkInterfaceCard.lanID(), logColor());
+        }
+
         runCLI();
     }
 
@@ -82,7 +116,10 @@ public abstract class Node {
                 }
             }
         }, name + "-rx");
-        thread.setDaemon(true);
+        // Non-daemon: the receiver is the node's reason for existing. Even if the
+        // CLI loop exits (e.g., stdin closed under backgrounding), the JVM should
+        // stay alive serving frames until explicitly killed.
+        thread.setDaemon(false);
         thread.start();
     }
 
@@ -104,7 +141,7 @@ public abstract class Node {
         // Decode the Ethernet frame payload into an IP packet and dispatch it for handling
         IPPacket packet = IPPacket.decode(frame.data());
         log.rx(frame.toString());
-        log.rx("  └─ " + packet);
+        log.info("  └─ " + packet);
         handleIPPacket(packet, frame);
     }
 
@@ -112,10 +149,30 @@ public abstract class Node {
      * Handle an IP packet extracted from a frame (after de-encapsulation)
      */
     protected void handleIPPacket(IPPacket packet, EthernetFrame frame) {
+        if (packet.protocol() == IPPacket.PROTOCOL_DHCP) {
+            handleDHCPPacket(packet);
+            return;
+        }
         if (packet.protocol() == IPPacket.PROTOCOL_ICMP) {
             handlePing(packet, frame);
         } else if (packet.protocol() == IPPacket.PROTOCOL_DATA) {
             handleTextMessage(packet);
+        }
+    }
+
+    /**
+     * Route an inbound DHCP packet to this node's DHCP client. Nodes not running
+     * a DHCP client (static mode, or other LAN members observing the broadcast)
+     * silently ignore the packet.
+     */
+    protected void handleDHCPPacket(IPPacket packet) {
+        if (dhcpClient == null) return;
+        try {
+            DHCPMessage msg = DHCPMessage.decode(packet.data());
+            log.info("     └─ " + msg);
+            dhcpClient.deliver(msg);
+        } catch (Exception e) {
+            log.error("Bad DHCP message: " + e.getMessage());
         }
     }
 
@@ -161,7 +218,12 @@ public abstract class Node {
 
             if (destinationLAN == networkInterfaceCard.lanID()) {
                 // If same LAN, resolve destination MAC Address
-                destinationMACAddress = AddressTable.resolve(packet.destinationIPAddress());
+                Optional<MACAddress> resolved = AddressTable.resolve(packet.destinationIPAddress());
+                if (resolved.isEmpty()) {
+                    log.error("Cannot resolve destination IP " + packet.destinationIPAddress() + " — no MAC binding known");
+                    return;
+                }
+                destinationMACAddress = resolved.get();
             } else {
                 // If different LAN, send to local router interface
                 destinationMACAddress = AddressTable.getRouterMACAddressForLAN(networkInterfaceCard.lanID());
@@ -182,7 +244,7 @@ public abstract class Node {
         DatagramPacket packet = new DatagramPacket(data, data.length, targetAddress);
         socket.send(packet);
         log.tx(frame.toString());
-        log.tx("  └─ " + IPPacket.decode(frame.data()));
+        log.info("  └─ " + IPPacket.decode(frame.data()));
     }
 
     /**

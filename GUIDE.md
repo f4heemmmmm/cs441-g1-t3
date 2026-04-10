@@ -24,6 +24,10 @@
   - [Demo 11 — Text Messaging](#demo-11--text-messaging-between-nodes)
   - [Demo 12 — Encrypted Messaging vs Sniffing](#demo-12--encrypted-messaging-vs-sniffing)
   - [Demo 13 — IDS MAC-IP Binding Detection](#demo-13--ids-mac-ip-binding-detection-same-lan-spoof)
+  - [Demo 14 — DHCP Boot & Lease Assignment](#demo-14--dhcp-boot--lease-assignment)
+  - [Demo 15 — DHCP-Snooping IDS Learns from Lease Traffic](#demo-15--dhcp-snooping-ids-learns-from-lease-traffic)
+  - [Demo 16 — Lease Expiry Erodes IDS Protection](#demo-16--lease-expiry-erodes-ids-protection)
+  - [Demo 17 — Static Fallback (`--static`)](#demo-17--static-fallback---static)
 - [10. Log Format Reference](#10-log-format-reference)
 - [11. Unit Tests](#11-unit-tests)
 
@@ -37,8 +41,14 @@ This project emulates an **IP-over-Ethernet network** using Java UDP sockets. It
 - **IP packet routing** across multiple LAN segments through a router
 - **ICMP ping** (echo request/reply) with RTT measurement
 - **Text messaging** with plaintext and encrypted modes (XOR cipher)
+- **Dynamic IP assignment via DHCP** — each node acquires its IP via a real
+  DISCOVER → OFFER → REQUEST → ACK handshake from a per-LAN DHCP server
+  hosted on the Router. Static-IP fallback is available via `--static`.
 - **Security attacks**: IP spoofing, network sniffing (promiscuous mode), and ping flooding
-- **Security defenses**: a packet-filtering firewall, an Intrusion Detection System (IDS) with MAC-IP binding verification, and encrypted communication
+- **Security defenses**: a packet-filtering firewall, encrypted communication,
+  and an Intrusion Detection System (IDS) that uses **DHCP snooping** —
+  learning MAC↔IP bindings from observed DHCPACK messages — to verify the
+  authenticity of every forwarded packet
 
 Each network device (node, router, LAN emulator) runs as a **separate Java process** and communicates via localhost UDP sockets, faithfully emulating real Ethernet broadcast behavior.
 
@@ -104,6 +114,14 @@ Each network device (node, router, LAN emulator) runs as a **separate Java proce
 
 **Routing rule:** The high nibble of the destination IP determines the target LAN (`0x1_` = LAN1, `0x2_` = LAN2, `0x3_` = LAN3). The router uses this to decide which egress interface to forward packets through.
 
+**DHCP pool rule:** Each LAN's DHCP server hands out addresses with the LAN's
+high nibble. LAN1's pool is `0x12`–`0x1F` (14 addresses), LAN2's pool is
+`0x22`–`0x2F`, LAN3's pool is `0x32`–`0x3F`. The low-nibble value `_1` is
+reserved for the router gateway on each LAN (`0x11`, `0x21`, `0x31`) and `_0`
+is reserved as the "unassigned" sentinel. The IP addresses in the table above
+are the **typical first lease** each node receives — when nodes are restarted
+in a different order, they may receive different addresses from the pool.
+
 ---
 
 ## 4. Protocol Formats
@@ -136,9 +154,9 @@ Each network device (node, router, LAN emulator) runs as a **separate Java proce
 
 - **Source IP**: 1 byte (e.g., `0x12`)
 - **Destination IP**: 1 byte (e.g., `0x22`)
-- **Protocol**: 1 byte (`0x01` = ICMP, `0x02` = DATA)
+- **Protocol**: 1 byte (`0x01` = ICMP, `0x02` = DATA, `0x03` = DHCP)
 - **Data Length**: 1 unsigned byte
-- **Data**: 0 to 256 bytes (the ICMP/ping or text message payload)
+- **Data**: 0 to 256 bytes (the ICMP/ping, text message, or DHCP message payload)
 
 ### Ping (ICMP Echo) Message
 
@@ -171,6 +189,29 @@ Each network device (node, router, LAN emulator) runs as a **separate Java proce
 - **Header size**: 2 bytes
 - When encrypted, the text is XOR-encrypted with a shared key before transmission
 - A sniffer sees the raw encrypted bytes; the legitimate receiver decrypts on arrival
+
+### DHCP Message (DHCP Protocol)
+
+```
+ 0      1      2      3      4      5      6      7      8      9
+┌──────┬────────────┬────────────┬──────┬──────┬────────────┬──────┐
+│  op  │    xid     │ clientMAC  │yourIP│srvIP │ leaseSecs  │flags │
+│ 1 B  │   2 B      │   2 B      │ 1 B  │ 1 B  │   2 B      │ 1 B  │
+└──────┴────────────┴────────────┴──────┴──────┴────────────┴──────┘
+```
+
+- **op**: 1=DISCOVER, 2=OFFER, 3=REQUEST, 4=ACK, 5=NAK, 6=RELEASE, 7=RENEW
+- **xid**: 16-bit transaction ID — clients use this to correlate replies
+- **clientMAC**: 2 ASCII characters — the MAC the lease is for
+- **yourIP**: 1 byte — the address being offered/leased (`0x00` = unassigned)
+- **serverIP**: 1 byte — the DHCP server's IP, which doubles as the gateway hint
+- **leaseSecs**: 16-bit unsigned — lease duration in seconds (default: 60s)
+- **flags**: bit 0 = broadcast-reply requested, others reserved
+- **Total**: 10 bytes fixed
+- During the bootstrap phase the source IP is `0x00` (unassigned) and the
+  destination IP is `0xFF` (broadcast). The Ethernet frame uses the broadcast
+  MAC `FF` so every endpoint on the LAN — including the router's DHCP server —
+  receives it.
 
 ---
 
@@ -216,12 +257,54 @@ Extends Node with a packet-filtering firewall:
 
 A multi-interface IP router connecting all three LANs:
 
-- Has 3 `NetworkInterface` records (R1/LAN1, R2/LAN2, R3/LAN3), each with its own UDP socket
+- Has 3 `NetworkInterface` instances (R1/LAN1, R2/LAN2, R3/LAN3), each with its own UDP socket
 - **Registers** each interface with its respective LAN emulator
 - **Receives** frames on any interface, applies MAC filtering
 - **Forwards** IP packets: determines the destination LAN from the high nibble of the destination IP, resolves the destination MAC, re-encapsulates into a new Ethernet frame, and sends it out the correct egress interface
 - **Handles local packets**: If the destination IP is one of the router's own IPs, it processes the packet locally (e.g., replies to pings)
 - **Integrates the IDS** for security inspection of forwarded traffic
+- **Hosts three DHCP servers** — one per LAN interface — that allocate
+  addresses from the per-LAN pool. DHCP frames are intercepted before IDS
+  inspection or routing, since they are L2-broadcast and not addressed to the
+  router in the conventional sense.
+- **Feeds DHCP snooping into the IDS**: every successful DHCPACK is reported
+  via `IDS.recordDHCPLease(mac, ip)`, and every DHCPRELEASE is reported via
+  `IDS.forgetDHCPLease(mac)`, so the IDS always reflects the live binding
+  state issued by its own DHCP server.
+
+### DHCP Server (`netemu.device.DHCPServer`)
+
+Per-LAN address allocator owned by the router. One instance per router
+interface — they do not coordinate across LANs because each LAN is physically
+distinct.
+
+- **Pool**: a deque of `IPAddress` values from `AddressTable.lanPool(lanID)`,
+  with the gateway IP (`0x_1`) reserved
+- **Lease table**: `Map<MACAddress, Lease>` with expiry timestamps; expired
+  leases are reclaimed lazily on the next message
+- **Offered table**: tracks pending offers so duplicate DISCOVERs from the
+  same client are idempotent
+- **Operations**: `handle(DHCPMessage)` returns the appropriate response
+  (OFFER for DISCOVER, ACK or NAK for REQUEST/RENEW). RELEASE returns the
+  address to the pool with no reply.
+- **Default lease**: 60 seconds — short enough to demo lease expiry within a
+  single session
+
+### DHCP Client (`netemu.device.DHCPClient`)
+
+Per-node DHCP state machine used during startup. Each node has at most one.
+
+- **State machine**: `INIT → SELECTING → REQUESTING → BOUND` with retry on
+  timeout or NAK
+- **Backoff**: exponential — initial timeout 2s, doubling each attempt, up to
+  5 attempts
+- **Inbox model**: the node's receiver thread feeds DHCP messages into the
+  client via `deliver(DHCPMessage)`; the client's main thread polls the
+  inbox during `acquireLease()`
+- **Mac-filtered inbox**: only messages whose `clientMAC` matches the local
+  MAC are queued, so foreign broadcasts from other clients are ignored
+- **Side effects on success**: the client mutates `NetworkInterface.assignIP()`
+  and calls `AddressTable.bind()` so the rest of the node sees the new IP
 
 ### Firewall (`netemu.device.Firewall`)
 
@@ -235,13 +318,31 @@ A source-IP-based packet filter:
 
 The open-category extension. Monitors router-forwarded traffic for:
 
-1. **IP Spoof Detection (Cross-LAN)**: If a packet's source IP belongs to a different LAN than the interface it arrived on, it's flagged as a potential spoof. (e.g., source IP `0x22`/LAN2 arriving on the LAN1 interface)
-2. **MAC-IP Binding Verification (Same-LAN)**: Verifies that the source MAC address matches the expected MAC for the source IP using the address table. Catches same-LAN spoofing that cross-LAN detection cannot. (e.g., MAC `N1` sending with source IP `0x13` when `0x13` belongs to MAC `N2`)
-3. **Ping Flood Detection**: Tracks ICMP echo requests per source IP in a sliding 5-second window. If more than 10 requests arrive within the window, it flags a flood.
+1. **IP Spoof Detection (Cross-LAN)**: If a packet's source IP belongs to a
+   different LAN than the interface it arrived on, it's flagged as a potential
+   spoof. (e.g., source IP `0x22`/LAN2 arriving on the LAN1 interface) — this
+   check is structural and works regardless of DHCP.
+2. **MAC-IP Binding Verification (DHCP Snooping)**: The IDS maintains its own
+   `Map<MACAddress, IPAddress>` populated from observed DHCPACK messages
+   flowing through the router. For every forwarded packet, it checks both
+   directions:
+   - the source MAC has a snooped lease for an IP that doesn't match the
+     packet's source IP, **or**
+   - the packet's source IP belongs to a *different* MAC's snooped lease.
+   The second case is the more interesting attack — it's how the IDS catches
+   Node1 stealing Node2's identity within a single LAN. This mirrors
+   real-world **Dynamic ARP Inspection** and **DHCP-snooping ACLs** on managed
+   switches. Without a snooped binding, the check is skipped (no
+   false-positive on a client mid-handshake).
+3. **Ping Flood Detection**: Tracks ICMP echo requests per source IP in a
+   sliding 5-second window. If more than 10 requests arrive within the window,
+   it flags a flood.
 
 Two operating modes:
 - **Passive**: Logs alerts only (packets are still forwarded)
 - **Active**: Logs alerts AND drops suspicious packets
+
+The snooped binding table is visible via `ids status` on the Router CLI.
 
 ---
 
@@ -254,7 +355,8 @@ cd cs441-g1-t3
 mvn clean package
 ```
 
-This compiles the project, runs all 130 unit tests, and produces a fat JAR at:
+This compiles the project, runs all 170 unit tests (including the DHCP test
+suite and the end-to-end DHCP integration test), and produces a fat JAR at:
 ```
 target/netemu-1.0-SNAPSHOT.jar
 ```
@@ -299,7 +401,9 @@ HH:mm:ss.SSS [LAN1] Listening on port 5001
 
 ### Step 2 — Start the Router
 
-The router registers its three interfaces (R1, R2, R3) with all three LAN emulators.
+The router registers its three interfaces (R1, R2, R3) with all three LAN
+emulators **and** spins up one DHCP server per interface. The router must be
+running before any DHCP-mode node attempts to acquire a lease.
 
 **Terminal 4 — Router:**
 ```bash
@@ -333,6 +437,21 @@ HH:mm:ss.SSS [LAN1] Device R1 joined (port 6011)
 
 ### Step 3 — Start the Nodes
 
+Each node runs DHCP by default. Add `--static` after the class name to use the
+legacy hardcoded IPs (useful for debugging or for demonstrating the trade-off
+in Demo 17).
+
+**Boot order matters for predictable IP assignment.** The DHCP server hands
+out addresses from the LAN pool in FIFO order. If you want the demo IPs in
+the address table to match exactly (Node1 → `0x12`, Node2 → `0x13`, etc.),
+start the nodes **one at a time** in order: Node1 → Node2 → Node3 → Node4,
+with a brief pause (a second is plenty) between each so the DHCPACK lands
+before the next node DISCOVERs. If you start them in parallel (e.g., from a
+script), the first node to win the broadcast race gets `0x12`, the second
+gets `0x13`, and so on — which may not be the order of `Node1` → `Node4`.
+Use `info` on each node to confirm what it actually received, or substitute
+the actual IPs in the demo commands.
+
 **Terminal 5 — Node1 (Attacker):**
 ```bash
 java -cp target/netemu-1.0-SNAPSHOT.jar netemu.device.Node1
@@ -353,13 +472,22 @@ java -cp target/netemu-1.0-SNAPSHOT.jar netemu.device.Node3
 java -cp target/netemu-1.0-SNAPSHOT.jar netemu.device.Node4
 ```
 
-Each node prints a startup banner, for example Node1:
+Each node prints a startup banner. In **DHCP mode** (the default) Node1 looks
+like:
 ```
 ==================================================
-  Node1 | MAC: N1 | IP: 0x12 | LAN1
+  Node1 | MAC: N1 | IP: (pending DHCP) | LAN1
 ==================================================
 HH:mm:ss.SSS [Node1] Listening on port 6001
 HH:mm:ss.SSS [Node1] Connected to LAN1 emulator
+HH:mm:ss.SSS [Node1] DHCP: requesting lease...
+HH:mm:ss.SSS [Node1] DHCP: sent DISCOVER xid=0x1a2b
+HH:mm:ss.SSS [Node1] DHCP: got OFFER 0x12 from server 0x11
+HH:mm:ss.SSS [Node1] DHCP: sent REQUEST for 0x12 xid=0x1a2b
+HH:mm:ss.SSS [Node1] DHCP: ACK — leased 0x12 for 60s (gateway 0x11)
+==================================================
+  Node1 | MAC: N1 | IP: 0x12 | LAN1
+==================================================
 
 --- Node1 Commands ---
   ping <destIP> [count <n>]  - Send ping(s)
@@ -373,9 +501,32 @@ HH:mm:ss.SSS [Node1] Connected to LAN1 emulator
   flood <destIP> <count>     - Send ping flood
 ```
 
+The Router's terminal will print the matching server-side log lines:
+```
+HH:mm:ss.SSS [Router] DHCP[LAN1]: offering 0x12 to N1
+HH:mm:ss.SSS [Router] DHCP[LAN1]: ACK — leased 0x12 to N1 for 60s
+HH:mm:ss.SSS [Router] IDS snoop: learned N1 -> 0x12
+```
+
+The `IDS snoop: learned ...` line is the integration point — every successful
+lease immediately becomes an authoritative MAC↔IP binding the IDS will use to
+verify subsequent packets.
+
+In **static mode** (`Node1 --static`) the second banner appears immediately
+with no DHCP exchange, and no `IDS snoop:` line is logged on the Router.
+
 ### Step 4 — You are ready
 
-All 8 processes are now running. Type commands in any node's terminal to interact with the network. Use `quit` or Ctrl+C to stop any process.
+All 8 processes are now running. Type commands in any node's terminal to
+interact with the network. Use `quit` or Ctrl+C to stop any process.
+
+**Running in background.** The receiver threads are non-daemon, so each
+process stays alive even if its stdin is at EOF — you can run any device
+with `... &` or under `nohup` / `tmux` / `screen` for unattended operation.
+Use `kill <pid>` (or the `quit` CLI command, if you have a terminal attached)
+to terminate. In an interactive terminal, pressing Ctrl+D exits the CLI loop
+but does **not** kill the process; use `quit` for a clean shutdown or
+Ctrl+C for an immediate one.
 
 ---
 
@@ -420,7 +571,7 @@ All 8 processes are now running. Type commands in any node's terminal to interac
 | `ids off` | Disable the IDS. |
 | `ids mode active` | Set IDS to active mode — suspicious packets are logged AND dropped. |
 | `ids mode passive` | Set IDS to passive mode — suspicious packets are logged only (still forwarded). |
-| `ids status` | Show IDS enabled/disabled state, mode, and alert counters. |
+| `ids status` | Show IDS enabled/disabled state, mode, **snooped lease table** (MAC → IP bindings learned from observed DHCPACKs), and alert counters. |
 
 ---
 
@@ -614,7 +765,7 @@ IP spoofing is one of the most fundamental network attacks. In a real network, t
 - Frame another host as the source of malicious traffic
 - Bypass IP-based access controls
 
-Note: While the IDS's cross-LAN check would not catch this spoof (both Node1 and Node2 are on LAN1), the **MAC-IP binding verification** will detect it — because MAC `N1` is sending with source IP `0x13`, which should belong to MAC `N2`. See Demo 13 for details.
+Note: While the IDS's cross-LAN check would not catch this spoof (both Node1 and Node2 are on LAN1), the **DHCP-snooping MAC-IP binding verification** will detect it — the IDS observed Node1's DHCPACK earlier and recorded that `N1` holds `0x12`, so seeing `N1` source a packet from `0x13` is a clear lease violation. See Demo 13 for details.
 
 #### Steps
 
@@ -892,13 +1043,17 @@ ping 0x32
 HH:mm:ss.SSS [Router] RX Frame [N1 -> R1 | 14 bytes] on R1
 HH:mm:ss.SSS [Router]   └─ Packet [0x22 -> 0x32 | ICMP | 10 bytes]
 HH:mm:ss.SSS [Router] SECURITY: IDS Alert — IP spoof detected: 0x22 claims LAN2 but arrived on LAN1 (MAC: N1)
-HH:mm:ss.SSS [Router] SECURITY: IDS Alert — MAC-IP mismatch: N1 sent packet with source IP 0x22 (expected MAC: N3)
+HH:mm:ss.SSS [Router] SECURITY: IDS Alert — MAC-IP mismatch: N1 sent packet with source IP 0x22 (snooped lease: 0x12)
 HH:mm:ss.SSS [Router] Routing: 0x22 -> 0x32 via LAN3
 HH:mm:ss.SSS [Router] TX Frame [R3 -> N4 | 14 bytes]
 HH:mm:ss.SSS [Router]   └─ Packet [0x22 -> 0x32 | ICMP | 10 bytes]
 ```
 
-The alerts are logged, but the packet was still forwarded (passive mode). Check IDS statistics:
+The alerts are logged, but the packet was still forwarded (passive mode).
+The MAC-IP alert reads "snooped lease: 0x12" because the IDS knows MAC `N1`
+holds `0x12` (from its earlier DHCPACK) — and the spoofed source `0x22`
+clearly isn't `0x12`. Check IDS statistics:
+
 ```
 ids status
 ```
@@ -906,6 +1061,11 @@ Output:
 ```
   IDS:            ON (monitoring)
   Mode:           PASSIVE (log only)
+  Snooped leases: 4
+    N1 -> 0x12
+    N2 -> 0x13
+    N3 -> 0x22
+    N4 -> 0x32
   Spoof alerts:   1
   MAC-IP alerts:  1
   Flood alerts:   0
@@ -956,11 +1116,13 @@ ping 0x32
 HH:mm:ss.SSS [Router] RX Frame [N1 -> R1 | 14 bytes] on R1
 HH:mm:ss.SSS [Router]   └─ Packet [0x22 -> 0x32 | ICMP | 10 bytes]
 HH:mm:ss.SSS [Router] SECURITY: IDS Alert — IP spoof detected: 0x22 claims LAN2 but arrived on LAN1 (MAC: N1)
-HH:mm:ss.SSS [Router] SECURITY: IDS Alert — MAC-IP mismatch: N1 sent packet with source IP 0x22 (expected MAC: N3)
+HH:mm:ss.SSS [Router] SECURITY: IDS Alert — MAC-IP mismatch: N1 sent packet with source IP 0x22 (snooped lease: 0x12)
 HH:mm:ss.SSS [Router] SECURITY: IDS Action — Dropped packet from 0x22
 ```
 
-Note: No "Routing:" or "TX" message appears — the packet was dropped after the RX. Both the cross-LAN check and the MAC-IP binding check triggered alerts.
+Note: No "Routing:" or "TX" message appears — the packet was dropped after
+the RX. Both the cross-LAN check and the snooping MAC-IP check triggered
+alerts.
 
 **Node4 terminal:** (nothing — the ping never arrives)
 
@@ -1047,6 +1209,11 @@ Output:
 ```
   IDS:            ON (monitoring)
   Mode:           ACTIVE (log + drop)
+  Snooped leases: 4
+    N1 -> 0x12
+    N2 -> 0x13
+    N3 -> 0x22
+    N4 -> 0x32
   Spoof alerts:   0
   MAC-IP alerts:  0
   Flood alerts:   11
@@ -1084,25 +1251,28 @@ msg 0x22 Hello from Node2!
 **Node2 terminal:**
 ```
 HH:mm:ss.SSS [Node2] Sending plaintext message to 0x22: "Hello from Node2!"
-HH:mm:ss.SSS [Node2] TX Frame [N2 -> R1 | 24 bytes]
+HH:mm:ss.SSS [Node2] TX Frame [N2 -> R1 | 23 bytes]
 HH:mm:ss.SSS [Node2]   └─ Packet [0x13 -> 0x22 | DATA | 19 bytes]
 ```
 
 **Router terminal:**
 ```
-HH:mm:ss.SSS [Router] RX Frame [N2 -> R1 | 24 bytes] on R1
+HH:mm:ss.SSS [Router] RX Frame [N2 -> R1 | 23 bytes] on R1
 HH:mm:ss.SSS [Router]   └─ Packet [0x13 -> 0x22 | DATA | 19 bytes]
 HH:mm:ss.SSS [Router] Routing: 0x13 -> 0x22 via LAN2
-HH:mm:ss.SSS [Router] TX Frame [R2 -> N3 | 24 bytes]
+HH:mm:ss.SSS [Router] TX Frame [R2 -> N3 | 23 bytes]
 HH:mm:ss.SSS [Router]   └─ Packet [0x13 -> 0x22 | DATA | 19 bytes]
 ```
 
 **Node3 terminal:**
 ```
-HH:mm:ss.SSS [Node3] RX Frame [R2 -> N3 | 24 bytes]
+HH:mm:ss.SSS [Node3] RX Frame [R2 -> N3 | 23 bytes]
 HH:mm:ss.SSS [Node3]   └─ Packet [0x13 -> 0x22 | DATA | 19 bytes]
 HH:mm:ss.SSS [Node3] RX Message from 0x13: "Hello from Node2!"
 ```
+
+(Frame size 23 = IP-packet header 4 + TextMessage 19. The TextMessage 19 =
+2-byte header + 17-byte text "Hello from Node2!".)
 
 ---
 
@@ -1184,11 +1354,22 @@ sniff off
 
 #### What we are simulating
 
-Node1 spoofs Node2's IP address (`0x13`) while remaining on the same LAN. The IDS's **cross-LAN detection** would miss this (both `0x12` and `0x13` are on LAN1), but the **MAC-IP binding verification** catches it — because MAC `N1` is sending packets with source IP `0x13`, which should belong to MAC `N2`.
+Node1 spoofs Node2's IP address (`0x13`) while remaining on the same LAN.
+The IDS's **cross-LAN detection** would miss this (both `0x12` and `0x13`
+are on LAN1), but the **DHCP-snooping MAC-IP binding verification** catches
+it — because the IDS observed Node2's DHCPACK earlier and recorded that IP
+`0x13` is leased to MAC `N2`. When MAC `N1` then sources a packet from
+`0x13`, the snooped binding flags the mismatch.
 
 #### Why this matters
 
-Cross-LAN spoof detection alone has a blind spot: it cannot detect spoofing within the same LAN segment. MAC-IP binding verification closes this gap by verifying that each MAC address only sends packets with its own IP address. This is analogous to **Dynamic ARP Inspection (DAI)** in real network switches.
+Cross-LAN spoof detection alone has a blind spot: it cannot detect spoofing
+within the same LAN segment. The snooping check closes this gap by trusting
+only the bindings the DHCP server has actually issued. This is analogous to
+**DHCP snooping** combined with **Dynamic ARP Inspection (DAI)** on managed
+switches — features explicitly designed to prevent same-segment identity
+theft. Crucially, the IDS does not consult the static `AddressTable`; it
+maintains its own table populated only from observed DHCPACK messages.
 
 #### Steps
 
@@ -1206,11 +1387,16 @@ ping 0x22
 
 #### What happens
 
-1. Node1 sends a ping with source IP `0x13` (spoofed) from MAC `N1`.
-2. The packet arrives at Router R1 (LAN1).
-3. **Cross-LAN check**: Source IP `0x13` → LAN1, arrived on LAN1 → PASS (same LAN, no alert).
-4. **MAC-IP binding check**: Source IP `0x13` should have MAC `N2` (per address table), but the frame's source MAC is `N1` → MISMATCH → alert triggered.
-5. In **active mode**, the packet is **dropped**. Node3 never receives it.
+1. **Earlier**: Node2 booted, completed its DHCP handshake, and the Router
+   logged `IDS snoop: learned N2 -> 0x13`.
+2. Node1 sends a ping with source IP `0x13` (spoofed) from MAC `N1`.
+3. The packet arrives at Router R1 (LAN1).
+4. **Cross-LAN check**: Source IP `0x13` → LAN1, arrived on LAN1 → PASS
+   (same LAN, no alert).
+5. **MAC-IP snooping check**: The IDS scans its snooped binding table and
+   finds that `0x13` is leased to MAC `N2`, not the frame's source `N1` →
+   MISMATCH → alert triggered.
+6. In **active mode**, the packet is **dropped**. Node3 never receives it.
 
 #### Expected output
 
@@ -1218,9 +1404,17 @@ ping 0x22
 ```
 HH:mm:ss.SSS [Router] RX Frame [N1 -> R1 | 14 bytes] on R1
 HH:mm:ss.SSS [Router]   └─ Packet [0x13 -> 0x22 | ICMP | 10 bytes]
-HH:mm:ss.SSS [Router] SECURITY: IDS Alert — MAC-IP mismatch: N1 sent packet with source IP 0x13 (expected MAC: N2)
+HH:mm:ss.SSS [Router] SECURITY: IDS Alert — MAC-IP mismatch: N1 sent packet with source IP 0x13 (snooped lease: 0x12)
 HH:mm:ss.SSS [Router] SECURITY: IDS Action — Dropped packet from 0x13
 ```
+
+The alert message reads `(snooped lease: 0x12)` because the IDS notices that
+the **sender's** MAC (`N1`) holds a snooped lease for `0x12`, not for the
+`0x13` it's claiming. The "first branch" of the bidirectional MAC-IP check
+fires (sender has wrong IP for its lease). If `N1` were running in
+`--static` mode and had no snooped lease, the IDS would instead fall through
+to the "second branch" — scanning all snooped bindings to find that `0x13`
+belongs to `N2` — and the alert would read `(lease belongs to MAC: N2)`.
 
 **Check IDS status:**
 ```
@@ -1230,17 +1424,298 @@ Output:
 ```
   IDS:            ON (monitoring)
   Mode:           ACTIVE (log + drop)
+  Snooped leases: 4
+    N1 -> 0x12
+    N2 -> 0x13
+    N3 -> 0x22
+    N4 -> 0x32
   Spoof alerts:   0
   MAC-IP alerts:  1
   Flood alerts:   0
 ```
 
-Note that the spoof alert count is 0 (cross-LAN check passed), but the MAC-IP alert count is 1. The MAC-IP binding detection caught what cross-LAN detection could not.
+Note that the spoof alert count is 0 (cross-LAN check passed), but the MAC-IP
+alert count is 1. The snooping check caught what cross-LAN detection could
+not — and you can see the four authoritative leases the IDS is using as
+ground truth.
 
 **Clean up on Node1:**
 ```
 spoof off
 ```
+
+---
+
+### Demo 14 — DHCP Boot & Lease Assignment
+
+#### What we are simulating
+
+A node boots cleanly from no IP at all and acquires one through a complete
+DISCOVER → OFFER → REQUEST → ACK exchange with the router's per-LAN DHCP
+server. This demonstrates the entire DHCP integration end-to-end.
+
+#### Why this matters
+
+This is the foundational scenario for everything else DHCP-related. It proves
+that:
+- The DHCP server allocates from a per-LAN pool that respects the high-nibble
+  routing convention.
+- The DHCP client correctly handles the four-message handshake and updates
+  the node's `NetworkInterface` with the leased address.
+- The IDS learns the binding the moment the lease is granted, via DHCP
+  snooping — without any extra command from the operator.
+
+#### Steps
+
+Boot the system in the standard order: LAN1, LAN2, LAN3, Router, then Node1
+(or any node) — all without `--static`.
+
+#### What happens
+
+1. Node1 binds its socket and sends `REGISTER N1 6001` to LAN1's emulator
+   (the L2 plumbing must be in place before DHCP can work).
+2. Node1's `DHCPClient.acquireLease()` is called. It picks a random
+   transaction ID, sends `DHCPDISCOVER` as a broadcast frame
+   (`[N1 -> FF]`, src IP `0x00`, dst IP `0xFF`).
+3. LAN1 emulator fans the broadcast out to all registered endpoints.
+4. The Router's R1 interface receives the frame, decodes it, sees protocol
+   = `0x03` (DHCP), and routes the message to `dhcpServer1.handle(...)`.
+5. The DHCP server pops the first available IP from the LAN1 pool (`0x12`),
+   records a pending offer, and replies with `DHCPOFFER`.
+6. The Router wraps the OFFER in a frame `[R1 -> N1]` and sends it back
+   through LAN1.
+7. Node1's receiver thread routes the DHCP packet to `dhcpClient.deliver()`,
+   which queues it in the client's inbox.
+8. `acquireLease()` polls the inbox, gets the OFFER, and sends `DHCPREQUEST`
+   for `0x12`.
+9. The Router validates the request against the pending offer, commits the
+   lease (60s), calls `AddressTable.bind(0x12, N1, 1)`, and replies with
+   `DHCPACK`.
+10. The Router also calls `IDS.recordDHCPLease(N1, 0x12)` — this is the
+    snooping integration point.
+11. Node1 receives the ACK, calls `nic.assignIP(0x12)`, and prints its
+    second startup banner showing the leased IP.
+
+#### Expected output
+
+**Node1 terminal:**
+```
+HH:mm:ss.SSS [Node1] DHCP: requesting lease...
+HH:mm:ss.SSS [Node1] DHCP: sent DISCOVER xid=0x1a2b
+HH:mm:ss.SSS [Node1] DHCP: got OFFER 0x12 from server 0x11
+HH:mm:ss.SSS [Node1] DHCP: sent REQUEST for 0x12 xid=0x1a2b
+HH:mm:ss.SSS [Node1] DHCP: ACK — leased 0x12 for 60s (gateway 0x11)
+==================================================
+  Node1 | MAC: N1 | IP: 0x12 | LAN1
+==================================================
+```
+
+**Router terminal:**
+```
+HH:mm:ss.SSS [Router] RX Frame [N1 -> FF | 14 bytes] on R1
+HH:mm:ss.SSS [Router]   └─ Packet [0x00 -> 0xff | DHCP | 10 bytes]
+HH:mm:ss.SSS [Router]      └─ DHCP DISCOVER xid=0x1a2b client=N1 yourIP=0x00 serverIP=0x00 lease=0s
+HH:mm:ss.SSS [Router] DHCP[LAN1]: offering 0x12 to N1
+HH:mm:ss.SSS [Router] TX Frame [R1 -> N1 | 14 bytes]
+HH:mm:ss.SSS [Router]   └─ Packet [0x11 -> 0xff | DHCP | 10 bytes]
+HH:mm:ss.SSS [Router]      └─ DHCP OFFER xid=0x1a2b client=N1 yourIP=0x12 serverIP=0x11 lease=60s
+HH:mm:ss.SSS [Router] RX Frame [N1 -> FF | 14 bytes] on R1
+HH:mm:ss.SSS [Router]   └─ Packet [0x00 -> 0xff | DHCP | 10 bytes]
+HH:mm:ss.SSS [Router]      └─ DHCP REQUEST xid=0x1a2b client=N1 yourIP=0x12 serverIP=0x11 lease=0s
+HH:mm:ss.SSS [Router] DHCP[LAN1]: ACK — leased 0x12 to N1 for 60s
+HH:mm:ss.SSS [Router] IDS snoop: learned N1 -> 0x12
+HH:mm:ss.SSS [Router] TX Frame [R1 -> N1 | 14 bytes]
+HH:mm:ss.SSS [Router]   └─ Packet [0x11 -> 0xff | DHCP | 10 bytes]
+HH:mm:ss.SSS [Router]      └─ DHCP ACK xid=0x1a2b client=N1 yourIP=0x12 serverIP=0x11 lease=60s
+```
+
+(The frame size is `14 bytes` because that's the inner IP-packet length —
+4-byte IP header plus 10-byte DHCP message — not the full Ethernet wire
+size, which would include the additional 5-byte Ethernet header. `Frame.toString` reports
+`data.length` for symmetry with `Packet [... | 10 bytes]`.)
+
+After all four nodes have booted, run `ids status` on the Router and you
+should see all four snooped leases (`N1 -> 0x12`, `N2 -> 0x13`, `N3 -> 0x22`,
+`N4 -> 0x32`).
+
+---
+
+### Demo 15 — DHCP-Snooping IDS Learns from Lease Traffic
+
+#### What we are simulating
+
+The same same-LAN spoof scenario as Demo 13, but viewed end-to-end as a
+demonstration of the snooping mechanism. We show the snooped table on the
+Router *before* the attack, run the attack, and observe that the same
+binding table is what catches the spoof.
+
+#### Why this matters
+
+This is the "headline" scenario for the DHCP + IDS integration. It makes
+explicit that the IDS's authority comes from observing real DHCP traffic, not
+from a static configuration file. In a real network, this is exactly how a
+DHCP-snooping switch protects a LAN segment against ARP/IP spoofing.
+
+#### Steps
+
+After all four nodes have booted via DHCP, on the Router terminal:
+```
+ids on
+ids mode active
+ids status
+```
+
+The status output should include four snooped leases. Now on Node1:
+```
+spoof on 0x13
+ping 0x22
+```
+
+#### What happens
+
+1. The IDS already holds `N2 -> 0x13` in its snooped table (learned during
+   Node2's DHCP boot in Demo 14).
+2. Node1's spoofed packet arrives at R1 with source IP `0x13` and source
+   MAC `N1`.
+3. The cross-LAN check passes (same LAN). The snooping check scans the
+   table, finds that `0x13` is leased to `N2`, not `N1`, and flags the
+   mismatch.
+4. Active mode drops the packet.
+
+#### Expected output
+
+Identical to Demo 13's expected output. The point of running this demo
+separately is to *narrate* the snooping mechanism: show the learned bindings
+before the attack, run the attack, then run `ids status` again to confirm
+the alert counter incremented.
+
+**Clean up on Node1:**
+```
+spoof off
+```
+
+---
+
+### Demo 16 — Lease Expiry Erodes IDS Protection
+
+#### What we are simulating
+
+The default DHCP lease in this emulator is 60 seconds, and the current
+client has no auto-renewal. We let the lease expire on purpose and observe
+that the IDS loses its snooped binding for the expired client, weakening
+the spoof protection until that node re-acquires a lease.
+
+#### Why this matters
+
+This is the educational "why renewal exists" moment. It shows directly that
+DHCP snooping is only as accurate as the lease state itself — once a lease
+times out, the snooped binding must be evicted, otherwise the IDS could
+either false-positive on the next legitimate lease (if it kept stale
+bindings) or false-negative on a same-LAN spoof (because no binding exists
+to compare against). The emulator chooses correctness over availability:
+expired bindings are dropped, and the same-LAN spoof becomes detectable
+again only after a new lease is issued.
+
+#### Steps
+
+1. Boot the full system. Wait for all four nodes to acquire leases.
+2. Confirm with `ids status` on the Router — you should see four snooped
+   leases.
+3. Wait approximately 70 seconds without sending any traffic.
+4. Watch the Router log — it will eventually print lease expiry messages.
+5. Run `ids status` again — the snooped lease count should be lower (or
+   zero, if all four expired).
+6. Now from Node1: `spoof on 0x13` and `ping 0x22`.
+7. The IDS no longer has a binding for `N2 -> 0x13`, so the same-LAN spoof
+   check finds nothing to compare against and the alert does **not** fire
+   (the cross-LAN check still passes — both addresses are LAN1).
+
+#### Expected output
+
+**Router terminal during expiry:**
+```
+HH:mm:ss.SSS [Router] WARN: DHCP[LAN1]: lease expired — 0x12 reclaimed from N1
+HH:mm:ss.SSS [Router] WARN: DHCP[LAN1]: lease expired — 0x13 reclaimed from N2
+```
+
+(Note that lease expiry is checked lazily — the next time a DHCP message
+is processed on that LAN, expired leases are reaped. If no DHCP traffic
+arrives, the AddressTable will still hold stale bindings until the next
+DHCP exchange. To force expiry quickly during a demo, send any DHCP message
+via a node restart.)
+
+**After expiry, `ids status`:**
+```
+  IDS:            ON (monitoring)
+  Mode:           ACTIVE (log + drop)
+  Snooped leases: 0
+  Spoof alerts:   0
+  MAC-IP alerts:  0
+  Flood alerts:   0
+```
+
+**Then Node1's spoof attack:**
+The packet is forwarded normally. No IDS alert. This is the failure mode
+that DHCP renewal is designed to prevent.
+
+#### Suggested follow-up
+
+Restart Node2 in DHCP mode. The router issues a fresh lease, the IDS
+re-learns the `N2 -> 0x13` binding, and the spoof becomes detectable
+again. This makes the cause-and-effect crystal clear.
+
+---
+
+### Demo 17 — Static Fallback (`--static`)
+
+#### What we are simulating
+
+A node bypasses DHCP entirely and uses its hardcoded default IP. This is
+useful for debugging the network without a router (e.g., during early
+development, or to test only the L2 broadcast plumbing) but it has a real
+security cost: the IDS never observes a DHCPACK for the static node, so
+its snooping check has nothing to verify against.
+
+#### Why this matters
+
+Real networks have devices with static IPs (printers, servers, infra). The
+canonical answer is to add an explicit entry to the snooping ACL for those
+devices. This demo shows what happens when you don't — the static device
+becomes invisible to the snooping IDS, and the IDS skips the MAC-IP check
+rather than false-positive on the unknown binding.
+
+#### Steps
+
+1. Boot LAN1, LAN2, LAN3, Router, Node2, Node3, Node4 normally (DHCP).
+2. Run `ids on`, `ids mode active`, `ids status` on the Router to confirm
+   three snooped leases (`N2 -> 0x13`, `N3 -> 0x22`, `N4 -> 0x32`).
+3. Start Node1 in **static mode**:
+
+```
+java -cp target/netemu-1.0-SNAPSHOT.jar netemu.device.Node1 --static
+```
+
+4. Node1 boots immediately with `IP: 0x12`, no DHCP exchange. The Router
+   logs no `IDS snoop: learned N1 -> ...` line.
+5. Run `ids status` — there are still only three snooped leases. Node1 is
+   invisible to the snooping table.
+6. On Node1: `spoof on 0x13`, `ping 0x22`.
+7. The cross-LAN check passes (same LAN). The snooping check looks up
+   `N1` in the snooping table, finds nothing (Node1 is static), and skips
+   the binding check rather than false-positive on the unknown sender.
+8. The packet is forwarded — the spoof succeeds.
+
+#### What this shows
+
+The trade-off you accept by running static. To restore protection in a real
+network, you would add an explicit allow-list entry: "MAC `N1` is permitted
+to source IP `0x12`." We don't currently expose a CLI command for that, but
+the IDS API (`recordDHCPLease`) already supports it — a static-binding
+config file would be a small extension.
+
+To demonstrate restoration, kill Node1 (`quit`) and restart it without
+`--static`. It now goes through DHCP, the IDS learns its binding, and the
+same-LAN spoof becomes detectable again.
 
 ---
 
@@ -1272,7 +1747,7 @@ HH:mm:ss.SSS [ComponentName] [LEVEL:] message
 
 ## 11. Unit Tests
 
-Run all 130 tests with:
+Run all 170 tests with:
 ```bash
 mvn test
 ```
@@ -1283,10 +1758,13 @@ mvn test
 | `IPPacketTest` | 15 | Packet encode/decode, ICMP/DATA factory methods, round-trip fidelity, empty/max data, oversized rejection, unsigned length field, protocol constants, toString formats, full-stack test (Ping inside IP inside Ethernet) |
 | `PingMessageTest` | 12 | Request/reply creation, timestamp preservation, encode/decode round-trip, unsigned sequence, 8-byte timestamp range, RTT calculation, ICMP type constants |
 | `TextMessageTest` | 15 | Plaintext/encrypted encode/decode round-trips, XOR encryption obfuscation, decodeRaw (no decryption for sniffing), empty text, max length, length validation, toString content, full-stack tests (Text inside IP inside Ethernet, encrypted end-to-end) |
+| `DHCPMessageTest` | 17 | All seven op-codes (DISCOVER/OFFER/REQUEST/ACK/NAK/RELEASE/RENEW) round-trip, fixed 10-byte size, xid and leaseSecs 16-bit validation, broadcast flag on DISCOVER, opName mapping, IPPacket-DHCP integration (DHCP carried inside an IPPacket), `PROTOCOL_DHCP` constant value |
 | `MACAddressTest` | 12 | Constructor validation (null, too short, too long), ASCII encode/decode, writeTo offset, round-trip, broadcast constant, equality/hashCode |
 | `IPAddressTest` | 13 | Valid range (0x00–0xFF), boundary rejection, hex parsing (0x prefix, 0X prefix, no prefix), toByte, fromByte, LAN ID extraction, equality, hex string formatting |
 | `ByteUtilTest` | 11 | Big-endian short read/write, round-trip, hex parse/format, array slice (sub-array, from start, zero-length, source immutability) |
-| `AddressTableTest` | 17 | Port distinctness, all expected port/IP/MAC values, IP-to-MAC resolution, LAN lookup, router MAC/IP by LAN, unknown-input error cases |
+| `AddressTableTest` | 19 | Port distinctness, all expected port/IP/MAC values, IP-to-MAC resolution via `Optional`, LAN lookup, router MAC/IP by LAN, unknown-input behaviour, dynamic `bind`/`unbind` round-trips, `lanPool` range and size |
 | `FirewallTest` | 9 | Enabled by default, block/unblock rules, disabled bypasses rules, re-enable restores rules, multiple blocked sources, snapshot immutability, idempotent block |
-| `IntrusionDetectionSystemTest` | 12 | Disabled by default, passive/active cross-LAN spoof detection, MAC-IP binding mismatch detection (same-LAN spoofing), combined cross-LAN + MAC-IP alerts, legitimate packets pass, flood threshold trigger, passive flood (no drop), alert counter accumulation |
-| `NetworkInterfaceTest` | 4 | Record field access, toString content, equality, inequality |
+| `IntrusionDetectionSystemTest` | 17 | Disabled by default, passive/active cross-LAN spoof detection, MAC-IP binding mismatch via snooped bindings (same-LAN spoofing), combined cross-LAN + MAC-IP alerts, legitimate packets pass, flood threshold trigger, passive flood (no drop), alert counter accumulation, snooped binding learn/forget, unknown-MAC skip (no false positive), reverse-direction MAC-IP check, lease forgetting removes protection |
+| `DHCPServerTest` | 15 | Pool excludes gateway, DISCOVER → OFFER, REQUEST → ACK, ACK updates `AddressTable`, REQUEST for unknown IP → NAK, duplicate DISCOVER idempotent, pool exhaustion returns empty, RELEASE returns address to pool, RENEW extends lease, RENEW for unknown client → NAK, expired leases reclaimed, `leaseFor()` lookup, re-DISCOVER with existing lease, gateway IP / LAN ID accessors, single-DISCOVER pool decrement |
+| `NetworkInterfaceTest` | 4 | Field access, toString content, equality, inequality |
+| `DHCPClientIntegrationTest` | 1 | End-to-end DHCP handshake over real UDP sockets — boots a real `LAN` emulator, a fake router running an actual `DHCPServer`, and a real `DHCPClient`. Verifies the client acquires a lease, the NIC ends up with a valid leased IP, and `AddressTable.resolve` reflects the new binding. |

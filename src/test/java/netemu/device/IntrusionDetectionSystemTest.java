@@ -23,6 +23,13 @@ class IntrusionDetectionSystemTest {
         lan2Interface = new NetworkInterface(
                 AddressTable.MAC_R2, AddressTable.IP_R2, 2,
                 AddressTable.ROUTER2_PORT, AddressTable.LAN2_PORT);
+
+        // Seed the snooping table with the standard node bindings, simulating a
+        // post-handshake state where DHCP has handed out the default IPs.
+        ids.recordDHCPLease(AddressTable.MAC_N1, AddressTable.IP_N1);
+        ids.recordDHCPLease(AddressTable.MAC_N2, AddressTable.IP_N2);
+        ids.recordDHCPLease(AddressTable.MAC_N3, AddressTable.IP_N3);
+        ids.recordDHCPLease(AddressTable.MAC_N4, AddressTable.IP_N4);
     }
 
     @Test
@@ -203,6 +210,93 @@ class IntrusionDetectionSystemTest {
         assertTrue(drop);
         assertEquals(1, ids.spoofAlertCount());
         assertEquals(1, ids.macIpAlertCount());
+    }
+
+    @Test
+    void snoopedBindingsAreLearnable() {
+        IntrusionDetectionSystem freshIds = new IntrusionDetectionSystem(log);
+        assertEquals(0, freshIds.snoopedBindingCount());
+        freshIds.recordDHCPLease(new MACAddress("X1"), new IPAddress(0x15));
+        assertEquals(1, freshIds.snoopedBindingCount());
+        freshIds.forgetDHCPLease(new MACAddress("X1"));
+        assertEquals(0, freshIds.snoopedBindingCount());
+    }
+
+    @Test
+    void unknownMacSkipsMacIpCheck() {
+        // Fresh IDS, no snooped bindings — a packet with no known MAC should not
+        // false-positive the MAC-IP check (e.g., a DHCP client mid-handshake)
+        IntrusionDetectionSystem freshIds = new IntrusionDetectionSystem(log);
+        freshIds.setEnabled(true);
+        freshIds.setActiveMode(true);
+
+        IPPacket packet = IPPacket.icmp(new IPAddress(0x12), new IPAddress(0x22),
+                PingMessage.request(1).encode());
+        EthernetFrame frame = new EthernetFrame(new MACAddress("Z9"), new MACAddress("R1"),
+                packet.encode());
+
+        boolean drop = freshIds.inspect(packet, frame, lan1Interface);
+        assertFalse(drop, "no snooped binding for sender MAC, should not drop");
+        assertEquals(0, freshIds.macIpAlertCount());
+    }
+
+    @Test
+    void macIpCheckUsesSnoopedBindings() {
+        // Re-test the spoof case using only snooped bindings (no AddressTable seed).
+        IntrusionDetectionSystem freshIds = new IntrusionDetectionSystem(log);
+        freshIds.setEnabled(true);
+        freshIds.setActiveMode(true);
+
+        // Snoop: MAC N2 holds IP 0x13. MAC N1 then sources a packet from 0x13.
+        freshIds.recordDHCPLease(new MACAddress("N2"), new IPAddress(0x13));
+
+        IPPacket packet = IPPacket.icmp(new IPAddress(0x13), new IPAddress(0x22),
+                PingMessage.request(1).encode());
+        EthernetFrame frame = new EthernetFrame(new MACAddress("N1"), new MACAddress("R1"),
+                packet.encode());
+
+        boolean drop = freshIds.inspect(packet, frame, lan1Interface);
+        assertTrue(drop);
+        assertEquals(1, freshIds.macIpAlertCount());
+    }
+
+    @Test
+    void senderUsingOwnSnoopedIPIsClean() {
+        IntrusionDetectionSystem freshIds = new IntrusionDetectionSystem(log);
+        freshIds.setEnabled(true);
+        freshIds.setActiveMode(true);
+
+        freshIds.recordDHCPLease(new MACAddress("N1"), new IPAddress(0x12));
+
+        IPPacket packet = IPPacket.icmp(new IPAddress(0x12), new IPAddress(0x22),
+                PingMessage.request(1).encode());
+        EthernetFrame frame = new EthernetFrame(new MACAddress("N1"), new MACAddress("R1"),
+                packet.encode());
+
+        boolean drop = freshIds.inspect(packet, frame, lan1Interface);
+        assertFalse(drop);
+        assertEquals(0, freshIds.macIpAlertCount());
+    }
+
+    @Test
+    void forgottenLeaseRemovesProtection() {
+        IntrusionDetectionSystem freshIds = new IntrusionDetectionSystem(log);
+        freshIds.setEnabled(true);
+        freshIds.setActiveMode(true);
+
+        freshIds.recordDHCPLease(new MACAddress("N2"), new IPAddress(0x13));
+        freshIds.forgetDHCPLease(new MACAddress("N2"));
+
+        // After forget, N1 sourcing 0x13 is no longer detected because the binding
+        // is gone. (Same-LAN spoofing is undetectable without an authority.)
+        IPPacket packet = IPPacket.icmp(new IPAddress(0x13), new IPAddress(0x22),
+                PingMessage.request(1).encode());
+        EthernetFrame frame = new EthernetFrame(new MACAddress("N1"), new MACAddress("R1"),
+                packet.encode());
+
+        boolean drop = freshIds.inspect(packet, frame, lan1Interface);
+        assertFalse(drop);
+        assertEquals(0, freshIds.macIpAlertCount());
     }
 
     @Test

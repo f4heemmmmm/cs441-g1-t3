@@ -153,6 +153,7 @@ public class Node1 extends Node {
     }
 
     public static void main(String[] args) throws IOException {
-        new Node1().start();
+        boolean useStatic = args.length > 0 && "--static".equalsIgnoreCase(args[0]);
+        new Node1().start(!useStatic);
     }
 }

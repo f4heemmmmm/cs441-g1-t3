@@ -91,6 +91,7 @@ public class Node3 extends Node {
     }
 
     public static void main(String[] args) throws IOException {
-        new Node3().start();
+        boolean useStatic = args.length > 0 && "--static".equalsIgnoreCase(args[0]);
+        new Node3().start(!useStatic);
     }
 }

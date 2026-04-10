@@ -25,6 +25,7 @@ public class Node4 extends Node {
     }
 
     public static void main(String[] args) throws IOException {
-        new Node4().start();
+        boolean useStatic = args.length > 0 && "--static".equalsIgnoreCase(args[0]);
+        new Node4().start(!useStatic);
     }
 }
