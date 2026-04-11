@@ -3,12 +3,17 @@ package netemu.lan;
 import netemu.common.Log;
 import netemu.common.Ansi;
 import netemu.common.EthernetFrame;
+import netemu.common.IPPacket;
+import netemu.common.ARPMessage;
+import netemu.common.AddressTable;
+import netemu.common.MACAddress;
 
 import java.io.IOException;
 import java.net.InetAddress;
 import java.net.DatagramPacket;
 import java.net.DatagramSocket;
 import java.net.InetSocketAddress;
+import java.util.Scanner;
 import java.util.concurrent.ConcurrentHashMap;
 
 public class LAN {
@@ -17,6 +22,8 @@ public class LAN {
     private final int lanID;
     private final int portNumber;
     private final ConcurrentHashMap<String, InetSocketAddress> endpoints = new ConcurrentHashMap<>();
+    private volatile boolean dynamicARPInspectionEnabled = false;
+    private int daiDropCount = 0;
 
     public LAN(int lanID, int portNumber) {
         this.lanID = lanID;
@@ -28,6 +35,7 @@ public class LAN {
         DatagramSocket socket = new DatagramSocket(portNumber);
         Ansi.banner("LAN" + lanID + " Emulator (port " + portNumber + ")", Ansi.CYAN);
         log.info("Listening on port " + portNumber);
+        startCLI();
 
         byte[] buffer = new byte[1024];
         while (true) {
@@ -64,6 +72,10 @@ public class LAN {
             EthernetFrame frame = EthernetFrame.decode(data);
             log.rx("Received " + frame);
 
+            if (shouldDropByDAI(frame)) {
+                return;
+            }
+
             String srcMac = frame.sourceMACAddress().value();
             for (var entry : endpoints.entrySet()) {
                 if (!entry.getKey().equals(srcMac)) {
@@ -76,6 +88,105 @@ public class LAN {
         } catch (Exception e) {
             log.error("Failed to broadcast frame: " + e.getMessage());
         }
+    }
+
+    private boolean shouldDropByDAI(EthernetFrame frame) {
+        if (!dynamicARPInspectionEnabled) {
+            return false;
+        }
+
+        try {
+            IPPacket packet = IPPacket.decode(frame.data());
+            if (packet.protocol() != IPPacket.PROTOCOL_ARP) {
+                return false;
+            }
+
+            ARPMessage arp = ARPMessage.decode(packet.data());
+            if (!arp.isReply()) {
+                return false;
+            }
+
+            MACAddress expectedMACAddress = AddressTable.resolve(arp.senderIP());
+            boolean payloadMismatch = !expectedMACAddress.equals(arp.senderMAC());
+            boolean frameMismatch = !expectedMACAddress.equals(frame.sourceMACAddress());
+
+            if (payloadMismatch || frameMismatch) {
+                daiDropCount++;
+                log.security("DAI(LAN" + lanID + "): dropped forged ARP reply claim=" + arp.senderIP() +
+                        " is-at " + arp.senderMAC() + " (frame src=" + frame.sourceMACAddress() +
+                        ", expected=" + expectedMACAddress + ")");
+                return true;
+            }
+        } catch (IllegalArgumentException e) {
+            // Unknown sender in static table; keep behavior permissive for compatibility.
+        } catch (Exception e) {
+            log.error("DAI inspection error: " + e.getMessage());
+        }
+
+        return false;
+    }
+
+    private void startCLI() {
+        Thread t = new Thread(() -> {
+            try (Scanner scanner = new Scanner(System.in)) {
+                printHelp();
+                while (scanner.hasNextLine()) {
+                    String line = scanner.nextLine().trim();
+                    if (line.isEmpty()) {
+                        continue;
+                    }
+
+                    String[] parts = line.split("\\s+");
+                    String cmd = parts[0].toLowerCase();
+                    switch (cmd) {
+                        case "dai" -> handleDAICommand(parts);
+                        case "info" -> printInfo();
+                        case "help" -> printHelp();
+                        default -> System.out.println("Unknown command. Type 'help'.");
+                    }
+                }
+            } catch (Exception e) {
+                log.error("CLI error: " + e.getMessage());
+            }
+        }, "LAN" + lanID + "-cli");
+        t.setDaemon(true);
+        t.start();
+    }
+
+    private void handleDAICommand(String[] parts) {
+        if (parts.length < 2) {
+            System.out.println("Usage: dai <on|off|status>");
+            return;
+        }
+
+        switch (parts[1].toLowerCase()) {
+            case "on" -> {
+                dynamicARPInspectionEnabled = true;
+                log.security("DAI ON (LAN-side) — forged ARP replies will be dropped before broadcast");
+            }
+            case "off" -> {
+                dynamicARPInspectionEnabled = false;
+                log.info("DAI OFF (LAN-side)");
+            }
+            case "status" -> {
+                log.info("DAI status: " + (dynamicARPInspectionEnabled ? "ON" : "OFF") +
+                        " | dropped forged ARP replies: " + daiDropCount);
+            }
+            default -> System.out.println("Usage: dai <on|off|status>");
+        }
+    }
+
+    private void printInfo() {
+        log.info("LAN" + lanID + " info: endpoints=" + endpoints.size() +
+                ", DAI=" + (dynamicARPInspectionEnabled ? "ON" : "OFF") +
+                ", DAI drops=" + daiDropCount);
+    }
+
+    private void printHelp() {
+        System.out.println("Commands:");
+        System.out.println("  dai on|off|status  - Toggle/view LAN-side Dynamic ARP Inspection");
+        System.out.println("  info               - Show LAN state");
+        System.out.println("  help               - Show this help");
     }
 
     public static void main(String[] args) throws IOException {

@@ -12,6 +12,7 @@ public class IPPacket {
     public static final byte PROTOCOL_ICMP = 0x01;
     public static final byte PROTOCOL_DATA = 0x02;
     public static final byte PROTOCOL_DHCP = 0x03;
+    public static final byte PROTOCOL_ARP = 0x04;
 
     private final byte[] data;
     private final byte protocol;
@@ -41,6 +42,9 @@ public class IPPacket {
     // Create a DHCP packet
     public static IPPacket dhcp(IPAddress sourceIPAddress, IPAddress destinationIPAddress, byte[] dhcpData) {
         return new IPPacket(sourceIPAddress, destinationIPAddress, PROTOCOL_DHCP, dhcpData);
+    // Create an ARP control packet
+    public static IPPacket arp(IPAddress sourceIPAddress, IPAddress destinationIPAddress, byte[] arpData) {
+        return new IPPacket(sourceIPAddress, destinationIPAddress, PROTOCOL_ARP, arpData);
     }
 
     // Encode IP Packet into raw packet bytes (byte array)
@@ -93,6 +97,7 @@ public class IPPacket {
             case PROTOCOL_ICMP -> "ICMP";
             case PROTOCOL_DATA -> "DATA";
             case PROTOCOL_DHCP -> "DHCP";
+            case PROTOCOL_ARP -> "ARP";
             default -> String.valueOf(protocol & 0xFF);
         };
         return String.format("Packet [%s -> %s | %s | %d bytes]", sourceIPAddress, destinationIPAddress, protoName, data.length);

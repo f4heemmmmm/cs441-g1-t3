@@ -4,6 +4,8 @@ import netemu.common.*;
 
 import java.util.Optional;
 import java.util.Scanner;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 
 import java.io.IOException;
 import java.net.InetAddress;
@@ -19,6 +21,7 @@ public abstract class Node {
     protected InetSocketAddress lanEmulatorAddress;
     protected final NetworkInterface networkInterfaceCard;
     protected DHCPClient dhcpClient; // non-null only when running in DHCP mode
+    protected final ConcurrentHashMap<IPAddress, MACAddress> arpCache = new ConcurrentHashMap<>();
 
     protected Node(String name, NetworkInterface networkInterfaceCard, String color) {
         this.name = name;
@@ -140,6 +143,11 @@ public abstract class Node {
     protected void processFrame(EthernetFrame frame) {
         // Decode the Ethernet frame payload into an IP packet and dispatch it for handling
         IPPacket packet = IPPacket.decode(frame.data());
+
+        // Opportunistic ARP learning from all IP-based traffic.
+        // This keeps cache warm without requiring an explicit ARP exchange every time.
+        arpCache.put(packet.sourceIPAddress(), frame.sourceMACAddress());
+
         log.rx(frame.toString());
         log.info("  └─ " + packet);
         handleIPPacket(packet, frame);
@@ -153,6 +161,15 @@ public abstract class Node {
             handleDHCPPacket(packet);
             return;
         }
+        if (packet.protocol() == IPPacket.PROTOCOL_ARP) {
+            handleArp(packet, frame);
+            return;
+        }
+
+        if (!packet.destinationIPAddress().equals(networkInterfaceCard.ipAddress())) {
+            return;
+        }
+
         if (packet.protocol() == IPPacket.PROTOCOL_ICMP) {
             handlePing(packet, frame);
         } else if (packet.protocol() == IPPacket.PROTOCOL_DATA) {
@@ -173,6 +190,27 @@ public abstract class Node {
             dhcpClient.deliver(msg);
         } catch (Exception e) {
             log.error("Bad DHCP message: " + e.getMessage());
+        }
+    }
+
+    
+    protected void handleArp(IPPacket packet, EthernetFrame frame) {
+        ARPMessage arp = ARPMessage.decode(packet.data());
+
+        arpCache.put(arp.senderIP(), arp.senderMAC());
+
+        if (arp.isRequest() && arp.targetIP().equals(networkInterfaceCard.ipAddress())) {
+            log.rx("ARP request: who-has " + arp.targetIP() + " from " + arp.senderIP());
+            ARPMessage reply = ARPMessage.reply(networkInterfaceCard.ipAddress(), networkInterfaceCard.macAddress(), arp.senderIP());
+            IPPacket replyPacket = IPPacket.arp(networkInterfaceCard.ipAddress(), arp.senderIP(), reply.encode());
+            EthernetFrame replyFrame = new EthernetFrame(networkInterfaceCard.macAddress(), frame.sourceMACAddress(), replyPacket.encode());
+            try {
+                sendFrame(replyFrame, lanEmulatorAddress);
+            } catch (IOException e) {
+                log.error("Failed to send ARP reply: " + e.getMessage());
+            }
+        } else if (arp.isReply()) {
+            log.rx("ARP reply learned: " + arp.senderIP() + " is-at " + arp.senderMAC());
         }
     }
 
@@ -225,14 +263,56 @@ public abstract class Node {
                 }
                 destinationMACAddress = resolved.get();
             } else {
-                // If different LAN, send to local router interface
-                destinationMACAddress = AddressTable.getRouterMACAddressForLAN(networkInterfaceCard.lanID());
+                // If different LAN, resolve local router interface MAC (gateway) via ARP cache + request.
+                IPAddress gatewayIP = AddressTable.getRouterIPAddressForLAN(networkInterfaceCard.lanID());
+                destinationMACAddress = resolveSameLANMACAddress(gatewayIP);
+            }
+
+            if (destinationMACAddress == null) {
+                log.warn("ARP resolution timed out for " + packet.destinationIPAddress() + " — packet dropped");
+                return;
             }
 
             EthernetFrame frame = new EthernetFrame(networkInterfaceCard.macAddress(), destinationMACAddress, packet.encode());
             sendFrame(frame, lanEmulatorAddress);
         } catch (Exception e) {
             log.error("Failed to send packet: " + e.getMessage());
+        }
+    }
+
+    private MACAddress resolveSameLANMACAddress(IPAddress targetIP) {
+        MACAddress cached = arpCache.get(targetIP);
+        if (cached != null) {
+            return cached;
+        }
+
+        sendARPRequest(targetIP);
+
+        // Wait briefly for ARP reply to keep UX responsive in CLI usage.
+        long deadline = System.currentTimeMillis() + 400;
+        while (System.currentTimeMillis() < deadline) {
+            cached = arpCache.get(targetIP);
+            if (cached != null) {
+                return cached;
+            }
+            try {
+                Thread.sleep(20);
+            } catch (InterruptedException ignored) {
+            }
+        }
+
+        // ARP resolution timed out — no static fallback; caller decides what to do.
+        return null;
+    }
+
+    protected void sendARPRequest(IPAddress targetIP) {
+        try {
+            ARPMessage arp = ARPMessage.request(networkInterfaceCard.ipAddress(), networkInterfaceCard.macAddress(), targetIP);
+            IPPacket packet = IPPacket.arp(networkInterfaceCard.ipAddress(), targetIP, arp.encode());
+            EthernetFrame frame = new EthernetFrame(networkInterfaceCard.macAddress(), MACAddress.BROADCAST, packet.encode());
+            sendFrame(frame, lanEmulatorAddress);
+        } catch (Exception e) {
+            log.error("Failed to send ARP request: " + e.getMessage());
         }
     }
 
@@ -278,6 +358,7 @@ public abstract class Node {
 
         return switch (cmd) {
             case "ping" -> { handlePingCommand(parts); yield true; }
+            case "arp" -> { handleArpCommand(parts); yield true; }
             case "msg" -> { handleMsgCommand(parts, false); yield true; }
             case "emsg" -> { handleMsgCommand(parts, true); yield true; }
             case "help" -> { printHelp(); yield true; }
@@ -340,12 +421,43 @@ public abstract class Node {
         }
     }
 
+    private void handleArpCommand(String[] parts) {
+        if (parts.length < 2) {
+            System.out.println("Usage: arp show | arp resolve <ip>");
+            return;
+        }
+
+        switch (parts[1].toLowerCase()) {
+            case "show" -> {
+                System.out.println("ARP cache:");
+                if (arpCache.isEmpty()) {
+                    System.out.println("  (empty)");
+                } else {
+                    for (Map.Entry<IPAddress, MACAddress> e : arpCache.entrySet()) {
+                        System.out.println("  " + e.getKey() + " -> " + e.getValue());
+                    }
+                }
+            }
+            case "resolve" -> {
+                if (parts.length < 3) {
+                    System.out.println("Usage: arp resolve <ip>");
+                    return;
+                }
+                IPAddress targetIPAddress = IPAddress.parse(parts[2]);
+                sendARPRequest(targetIPAddress);
+            }
+            default -> System.out.println("Usage: arp show | arp resolve <ip>");
+        }
+    }
+
     /**
      * Print available CLI commands
      */
     protected void printHelp() {
         System.out.println("\n--- " + name + " Commands ---");
         System.out.println("  ping <destIP> [count <n>]  - Send ping(s)");
+        System.out.println("  arp show                   - Show learned ARP cache");
+        System.out.println("  arp resolve <ip>           - Send ARP request for an IP");
         System.out.println("  msg <destIP> <text>        - Send plaintext message");
         System.out.println("  emsg <destIP> <text>       - Send encrypted message");
         System.out.println("  info                       - Show interface info");

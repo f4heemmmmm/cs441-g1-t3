@@ -97,12 +97,21 @@ public class Router {
     }
 
     private void handleFrame(EthernetFrame frame, NetworkInterface incomingNetworkInterfaceCard) {
+        IPPacket packet = IPPacket.decode(frame.data());
+
+        // ARP is link-local and visible to all participants on the LAN emulator.
+        // Inspect ARP before MAC filtering so DAI can detect forged replies even
+        // when they are sent directly to a victim host.
+        if (packet.protocol() == IPPacket.PROTOCOL_ARP) {
+            handleArpPacket(packet, frame, incomingNetworkInterfaceCard);
+            return;
+        }
+
         // Only accept frames addressed to this router interface or broadcast
         if (!frame.destinationMACAddress().equals(incomingNetworkInterfaceCard.macAddress()) && !frame.destinationMACAddress().isBroadcast()) {
             return;
         }
 
-        IPPacket packet = IPPacket.decode(frame.data());
         log.rx(frame + " on " + incomingNetworkInterfaceCard.macAddress());
         log.info("  └─ " + packet);
 
@@ -185,6 +194,20 @@ public class Router {
         };
     }
 
+    private void handleArpPacket(IPPacket packet, EthernetFrame frame, NetworkInterface incomingNetworkInterfaceCard) {
+        ARPMessage arp = ARPMessage.decode(packet.data());
+
+        if (arp.isRequest() && arp.targetIP().equals(incomingNetworkInterfaceCard.ipAddress())) {
+            log.rx("ARP request for " + arp.targetIP() + " from " + arp.senderIP());
+            ARPMessage reply = ARPMessage.reply(incomingNetworkInterfaceCard.ipAddress(), incomingNetworkInterfaceCard.macAddress(), arp.senderIP());
+            IPPacket replyPacket = IPPacket.arp(incomingNetworkInterfaceCard.ipAddress(), arp.senderIP(), reply.encode());
+            EthernetFrame replyFrame = new EthernetFrame(incomingNetworkInterfaceCard.macAddress(), frame.sourceMACAddress(), replyPacket.encode());
+            sendRawFrameToLAN(replyFrame, incomingNetworkInterfaceCard);
+        } else if (arp.isReply()) {
+            log.rx("ARP reply observed: " + arp.senderIP() + " is-at " + arp.senderMAC());
+        }
+    }
+
     private boolean isOurIp(IPAddress ipAddress) {
         return ipAddress.equals(AddressTable.IP_R1) || ipAddress.equals(AddressTable.IP_R2) || ipAddress.equals(AddressTable.IP_R3);
     }
@@ -227,14 +250,22 @@ public class Router {
             }
             MACAddress destinationMACAddress = resolved.get();
             EthernetFrame frame = new EthernetFrame(outgoingNetworkInterfaceCard.macAddress(), destinationMACAddress, packet.encode());
-            byte[] data = frame.encode();
-            InetSocketAddress target = LANAddressforNetworkInterfaceCard(outgoingNetworkInterfaceCard);
-            DatagramPacket udp = new DatagramPacket(data, data.length, target);
-            socketForNic(outgoingNetworkInterfaceCard).send(udp);
+            sendRawFrameToLAN(frame, outgoingNetworkInterfaceCard);
             log.tx(frame.toString());
             log.info("  └─ " + packet);
         } catch (Exception e) {
             log.error("Failed to forward packet: " + e.getMessage());
+        }
+    }
+
+    private void sendRawFrameToLAN(EthernetFrame frame, NetworkInterface outgoingNetworkInterfaceCard) {
+        try {
+            byte[] data = frame.encode();
+            InetSocketAddress target = LANAddressforNetworkInterfaceCard(outgoingNetworkInterfaceCard);
+            DatagramPacket udp = new DatagramPacket(data, data.length, target);
+            socketForNic(outgoingNetworkInterfaceCard).send(udp);
+        } catch (Exception e) {
+            log.error("Failed to send frame: " + e.getMessage());
         }
     }
 
