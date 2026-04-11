@@ -121,6 +121,20 @@ public class Router {
         }
     }
 
+    private void handleArpPacket(IPPacket packet, EthernetFrame frame, NetworkInterface incomingNetworkInterfaceCard) {
+        ARPMessage arp = ARPMessage.decode(packet.data());
+
+        if (arp.isRequest() && arp.targetIP().equals(incomingNetworkInterfaceCard.ipAddress())) {
+            log.rx("ARP request for " + arp.targetIP() + " from " + arp.senderIP());
+            ARPMessage reply = ARPMessage.reply(incomingNetworkInterfaceCard.ipAddress(), incomingNetworkInterfaceCard.macAddress(), arp.senderIP());
+            IPPacket replyPacket = IPPacket.arp(incomingNetworkInterfaceCard.ipAddress(), arp.senderIP(), reply.encode());
+            EthernetFrame replyFrame = new EthernetFrame(incomingNetworkInterfaceCard.macAddress(), frame.sourceMACAddress(), replyPacket.encode());
+            sendRawFrameToLAN(replyFrame, incomingNetworkInterfaceCard);
+        } else if (arp.isReply()) {
+            log.rx("ARP reply observed: " + arp.senderIP() + " is-at " + arp.senderMAC());
+        }
+    }
+
     private boolean isOurIp(IPAddress ipAddress) {
         return ipAddress.equals(AddressTable.IP_R1) || ipAddress.equals(AddressTable.IP_R2) || ipAddress.equals(AddressTable.IP_R3);
     }

@@ -19,6 +19,7 @@ public abstract class Node {
     protected DatagramSocket socket;
     protected InetSocketAddress lanEmulatorAddress;
     protected final NetworkInterface networkInterfaceCard;
+    protected final ConcurrentHashMap<IPAddress, MACAddress> arpCache = new ConcurrentHashMap<>();
 
     protected Node(String name, NetworkInterface networkInterfaceCard, String color) {
         this.name = name;
@@ -119,10 +120,42 @@ public abstract class Node {
      * Handle an IP packet extracted from a frame (after de-encapsulation)
      */
     protected void handleIPPacket(IPPacket packet, EthernetFrame frame) {
+        if (packet.protocol() == IPPacket.PROTOCOL_ARP) {
+            handleArp(packet, frame);
+            return;
+        }
+
+        if (!packet.destinationIPAddress().equals(networkInterfaceCard.ipAddress())) {
+            return;
+        }
+
         if (packet.protocol() == IPPacket.PROTOCOL_ICMP) {
             handlePing(packet, frame);
         } else if (packet.protocol() == IPPacket.PROTOCOL_DATA) {
             handleTextMessage(packet);
+        }
+    }
+
+    /**
+     * Handle ARP-like request/reply control messages.
+     */
+    protected void handleArp(IPPacket packet, EthernetFrame frame) {
+        ARPMessage arp = ARPMessage.decode(packet.data());
+
+        arpCache.put(arp.senderIP(), arp.senderMAC());
+
+        if (arp.isRequest() && arp.targetIP().equals(networkInterfaceCard.ipAddress())) {
+            log.rx("ARP request: who-has " + arp.targetIP() + " from " + arp.senderIP());
+            ARPMessage reply = ARPMessage.reply(networkInterfaceCard.ipAddress(), networkInterfaceCard.macAddress(), arp.senderIP());
+            IPPacket replyPacket = IPPacket.arp(networkInterfaceCard.ipAddress(), arp.senderIP(), reply.encode());
+            EthernetFrame replyFrame = new EthernetFrame(networkInterfaceCard.macAddress(), frame.sourceMACAddress(), replyPacket.encode());
+            try {
+                sendFrame(replyFrame, lanEmulatorAddress);
+            } catch (IOException e) {
+                log.error("Failed to send ARP reply: " + e.getMessage());
+            }
+        } else if (arp.isReply()) {
+            log.rx("ARP reply learned: " + arp.senderIP() + " is-at " + arp.senderMAC());
         }
     }
 

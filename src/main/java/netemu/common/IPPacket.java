@@ -11,6 +11,7 @@ public class IPPacket {
     public static final int MAX_DATA_LENGTH = 256;
     public static final byte PROTOCOL_ICMP = 0x01;
     public static final byte PROTOCOL_DATA = 0x02;
+    public static final byte PROTOCOL_ARP = 0x03;
 
     private final byte[] data;
     private final byte protocol;
@@ -35,6 +36,11 @@ public class IPPacket {
     // Create a data/text packet
     public static IPPacket data(IPAddress sourceIPAddress, IPAddress destinationIPAddress, byte[] messageData) {
         return new IPPacket(sourceIPAddress, destinationIPAddress, PROTOCOL_DATA, messageData);
+    }
+
+    // Create an ARP control packet
+    public static IPPacket arp(IPAddress sourceIPAddress, IPAddress destinationIPAddress, byte[] arpData) {
+        return new IPPacket(sourceIPAddress, destinationIPAddress, PROTOCOL_ARP, arpData);
     }
 
     // Encode IP Packet into raw packet bytes (byte array)
@@ -86,6 +92,7 @@ public class IPPacket {
         String protoName = switch (protocol) {
             case PROTOCOL_ICMP -> "ICMP";
             case PROTOCOL_DATA -> "DATA";
+            case PROTOCOL_ARP -> "ARP";
             default -> String.valueOf(protocol & 0xFF);
         };
         return String.format("Packet [%s -> %s | %s | %d bytes]", sourceIPAddress, destinationIPAddress, protoName, data.length);
