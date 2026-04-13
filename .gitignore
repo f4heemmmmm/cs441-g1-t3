@@ -9,3 +9,4 @@ target/
 .project
 bin/
 .DS_Store
+.claude
