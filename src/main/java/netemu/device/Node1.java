@@ -211,7 +211,7 @@ public class Node1 extends Node {
         try {
             MACAddress victimMACAddress = arpCache.get(victimIPAddress);
             if (victimMACAddress == null) {
-                victimMACAddress = AddressTable.resolve(victimIPAddress);
+                victimMACAddress = AddressTable.resolve(victimIPAddress).orElseThrow();
             }
             ARPMessage forged = ARPMessage.reply(claimedIPAddress, networkInterfaceCard.macAddress(), victimIPAddress);
             IPPacket packet = IPPacket.arp(claimedIPAddress, victimIPAddress, forged.encode());
