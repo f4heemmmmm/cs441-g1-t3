@@ -215,12 +215,9 @@ public class Node1 extends Node {
         try {
             MACAddress victimMACAddress = arpCache.get(victimIPAddress);
             if (victimMACAddress == null) {
-                var resolvedVictimMACAddress = AddressTable.resolve(victimIPAddress);
-                if (resolvedVictimMACAddress.isEmpty()) {
-                    log.warn("Skipping forged ARP reply: no MAC mapping found for victim IP " + victimIPAddress);
-                    return;
-                }
-                victimMACAddress = resolvedVictimMACAddress.get();
+                log.warn("Unknown MAC for victim " + victimIPAddress + " — skipping ARP spoof");
+                return;
+                // victimMACAddress = AddressTable.resolve(victimIPAddress).orElse(null);
             }
             ARPMessage forged = ARPMessage.reply(claimedIPAddress, networkInterfaceCard.macAddress(), victimIPAddress);
             IPPacket packet = IPPacket.arp(claimedIPAddress, victimIPAddress, forged.encode());
