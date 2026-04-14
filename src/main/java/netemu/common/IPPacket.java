@@ -43,7 +43,6 @@ public class IPPacket {
     public static IPPacket dhcp(IPAddress sourceIPAddress, IPAddress destinationIPAddress, byte[] dhcpData) {
         return new IPPacket(sourceIPAddress, destinationIPAddress, PROTOCOL_DHCP, dhcpData);
     }
-
     // Create an ARP control packet
     public static IPPacket arp(IPAddress sourceIPAddress, IPAddress destinationIPAddress, byte[] arpData) {
         return new IPPacket(sourceIPAddress, destinationIPAddress, PROTOCOL_ARP, arpData);

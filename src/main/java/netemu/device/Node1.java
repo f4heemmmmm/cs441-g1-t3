@@ -94,6 +94,10 @@ public class Node1 extends Node {
      */
     @Override
     protected void handleIPPacket(IPPacket packet, EthernetFrame frame) {
+        if (packet.protocol() == IPPacket.PROTOCOL_DHCP) {
+            super.handleIPPacket(packet, frame);
+            return;
+        }
         if (!packet.destinationIPAddress().equals(networkInterfaceCard.ipAddress())
                 && packet.protocol() != IPPacket.PROTOCOL_ARP
                 && frame.destinationMACAddress().equals(networkInterfaceCard.macAddress())) {
@@ -211,7 +215,9 @@ public class Node1 extends Node {
         try {
             MACAddress victimMACAddress = arpCache.get(victimIPAddress);
             if (victimMACAddress == null) {
-                victimMACAddress = AddressTable.resolve(victimIPAddress).orElseThrow();
+                log.warn("Unknown MAC for victim " + victimIPAddress + " — skipping ARP spoof");
+                return;
+                // victimMACAddress = AddressTable.resolve(victimIPAddress).orElse(null);
             }
             ARPMessage forged = ARPMessage.reply(claimedIPAddress, networkInterfaceCard.macAddress(), victimIPAddress);
             IPPacket packet = IPPacket.arp(claimedIPAddress, victimIPAddress, forged.encode());
