@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# CS441 Network Emulator — Demo Launcher
+# CS441 Network Emulator â€” Demo Launcher
 # Works on macOS (Terminal.app) and Windows (Windows Terminal via Git Bash / WSL)
 # Run from the project root: bash start-demo.sh
 #
@@ -46,7 +46,7 @@ echo "Opening 8 terminals, 2s apart (~14s total)..."
 echo ""
 
 # ---------------------------------------------------------------------------
-# macOS — open tabs one at a time with a 2s delay between each
+# macOS â€” open tabs one at a time with a 2s delay between each
 # ---------------------------------------------------------------------------
 if [ "$OS" = "macos" ]; then
 
@@ -62,7 +62,7 @@ end tell
 APPLESCRIPT
     }
 
-    # Tab 1: LAN1 — open in a fresh window (not a new tab)
+    # Tab 1: LAN1 â€” open in a fresh window (not a new tab)
     osascript -e "tell application \"Terminal\" to do script \"cd '$UNIX_ROOT' && java -cp $JAR netemu.lan.LAN1\""
     echo "[t=0s]  LAN1 opened"
 
@@ -95,7 +95,7 @@ APPLESCRIPT
     echo "[t=14s] Node4 [NORMAL] opened"
 
 # ---------------------------------------------------------------------------
-# Windows (Git Bash / MSYS2) — open tabs one at a time with sleep between
+# Windows (Git Bash / MSYS2) â€” open tabs one at a time with sleep between
 # ---------------------------------------------------------------------------
 elif [ "$OS" = "windows" ]; then
 
@@ -155,44 +155,42 @@ elif [ "$OS" = "windows" ]; then
     echo "[t=14s] Node4 [NORMAL] opened"
 
 # ---------------------------------------------------------------------------
-# WSL — same as Windows but use wslpath and wt.exe
+# WSL â€” same as Windows but use wslpath and wt.exe
 # ---------------------------------------------------------------------------
 elif [ "$OS" = "wsl" ]; then
 
     WIN_ROOT=$(wslpath -w "$UNIX_ROOT")
     WIN_JAR="target\\netemu-1.0-SNAPSHOT.jar"
 
-    WT_WINDOW="netemu-demo"
-
     wt.exe --title "LAN1" cmd /k "cd /d \"$WIN_ROOT\" && java -cp $WIN_JAR netemu.lan.LAN1"
     echo "[t=0s]  LAN1 opened"
 
     sleep 2
-    wt.exe -w "$WT_WINDOW" new-tab --title "LAN2" cmd /k "cd /d \"$WIN_ROOT\" && java -cp $WIN_JAR netemu.lan.LAN2"
+    wt.exe -w 0 new-tab --title "LAN2" cmd /k "cd /d \"$WIN_ROOT\" && java -cp $WIN_JAR netemu.lan.LAN2"
     echo "[t=2s]  LAN2 opened"
 
     sleep 2
-    wt.exe -w "$WT_WINDOW" new-tab --title "LAN3" cmd /k "cd /d \"$WIN_ROOT\" && java -cp $WIN_JAR netemu.lan.LAN3"
+    wt.exe -w 0 new-tab --title "LAN3" cmd /k "cd /d \"$WIN_ROOT\" && java -cp $WIN_JAR netemu.lan.LAN3"
     echo "[t=4s]  LAN3 opened"
 
     sleep 2
-    wt.exe -w "$WT_WINDOW" new-tab --title "Router" cmd /k "cd /d \"$WIN_ROOT\" && java -cp $WIN_JAR netemu.device.Router"
+    wt.exe -w 0 new-tab --title "Router" cmd /k "cd /d \"$WIN_ROOT\" && java -cp $WIN_JAR netemu.device.Router"
     echo "[t=6s]  Router opened"
 
     sleep 2
-    wt.exe -w "$WT_WINDOW" new-tab --title "Node1 [ATTACKER]" cmd /k "cd /d \"$WIN_ROOT\" && java -cp $WIN_JAR netemu.device.Node1"
+    wt.exe -w 0 new-tab --title "Node1 [ATTACKER]" cmd /k "cd /d \"$WIN_ROOT\" && java -cp $WIN_JAR netemu.device.Node1"
     echo "[t=8s]  Node1 [ATTACKER] opened"
 
     sleep 2
-    wt.exe -w "$WT_WINDOW" new-tab --title "Node2 [NORMAL]" cmd /k "cd /d \"$WIN_ROOT\" && java -cp $WIN_JAR netemu.device.Node2"
+    wt.exe -w 0 new-tab --title "Node2 [NORMAL]" cmd /k "cd /d \"$WIN_ROOT\" && java -cp $WIN_JAR netemu.device.Node2"
     echo "[t=10s] Node2 [NORMAL] opened"
 
     sleep 2
-    wt.exe -w "$WT_WINDOW" new-tab --title "Node3 [FIREWALL]" cmd /k "cd /d \"$WIN_ROOT\" && java -cp $WIN_JAR netemu.device.Node3"
+    wt.exe -w 0 new-tab --title "Node3 [FIREWALL]" cmd /k "cd /d \"$WIN_ROOT\" && java -cp $WIN_JAR netemu.device.Node3"
     echo "[t=12s] Node3 [FIREWALL] opened"
 
     sleep 2
-    wt.exe -w "$WT_WINDOW" new-tab --title "Node4 [NORMAL]" cmd /k "cd /d \"$WIN_ROOT\" && java -cp $WIN_JAR netemu.device.Node4"
+    wt.exe -w 0 new-tab --title "Node4 [NORMAL]" cmd /k "cd /d \"$WIN_ROOT\" && java -cp $WIN_JAR netemu.device.Node4"
     echo "[t=14s] Node4 [NORMAL] opened"
 
 # ---------------------------------------------------------------------------
