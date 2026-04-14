@@ -13,6 +13,7 @@ import java.net.InetAddress;
 import java.net.DatagramPacket;
 import java.net.DatagramSocket;
 import java.net.InetSocketAddress;
+import java.util.Optional;
 import java.util.Scanner;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -106,7 +107,12 @@ public class LAN {
                 return false;
             }
 
-            MACAddress expectedMACAddress = AddressTable.resolve(arp.senderIP());
+            Optional<MACAddress> expected = AddressTable.resolve(arp.senderIP());
+            if (expected.isEmpty()) {
+                // Unknown sender in static table; keep behavior permissive for compatibility.
+                return false;
+            }
+            MACAddress expectedMACAddress = expected.get();
             boolean payloadMismatch = !expectedMACAddress.equals(arp.senderMAC());
             boolean frameMismatch = !expectedMACAddress.equals(frame.sourceMACAddress());
 

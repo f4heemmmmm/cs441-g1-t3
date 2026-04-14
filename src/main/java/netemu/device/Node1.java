@@ -94,8 +94,11 @@ public class Node1 extends Node {
      */
     @Override
     protected void handleIPPacket(IPPacket packet, EthernetFrame frame) {
-        if (!packet.destinationIPAddress().equals(networkInterfaceCard.ipAddress())
+        if (arpSpoofing
+                && !packet.destinationIPAddress().equals(networkInterfaceCard.ipAddress())
+                && !packet.destinationIPAddress().equals(DHCPMessage.BROADCAST_IP)
                 && packet.protocol() != IPPacket.PROTOCOL_ARP
+                && packet.protocol() != IPPacket.PROTOCOL_DHCP
                 && frame.destinationMACAddress().equals(networkInterfaceCard.macAddress())) {
             log.warn("[MITM] Intercepted: " + packet.sourceIPAddress() + " \u2192 " + packet.destinationIPAddress());
 
@@ -211,7 +214,11 @@ public class Node1 extends Node {
         try {
             MACAddress victimMACAddress = arpCache.get(victimIPAddress);
             if (victimMACAddress == null) {
-                victimMACAddress = AddressTable.resolve(victimIPAddress);
+                victimMACAddress = AddressTable.resolve(victimIPAddress).orElse(null);
+            }
+            if (victimMACAddress == null) {
+                log.error("Failed ARP spoof send: unknown victim " + victimIPAddress);
+                return;
             }
             ARPMessage forged = ARPMessage.reply(claimedIPAddress, networkInterfaceCard.macAddress(), victimIPAddress);
             IPPacket packet = IPPacket.arp(claimedIPAddress, victimIPAddress, forged.encode());
