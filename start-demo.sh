@@ -102,35 +102,56 @@ elif [ "$OS" = "windows" ]; then
     WIN_ROOT=$(pwd -W 2>/dev/null || cygpath -w "$UNIX_ROOT" 2>/dev/null || echo "$UNIX_ROOT")
     WIN_JAR="target\\netemu-1.0-SNAPSHOT.jar"
 
-    wt --title "LAN1" cmd /k "cd /d \"$WIN_ROOT\" && java -cp $WIN_JAR netemu.lan.LAN1"
+    if command -v wt >/dev/null 2>&1; then
+        WT_CMD="wt"
+    elif command -v wt.exe >/dev/null 2>&1; then
+        WT_CMD="wt.exe"
+    else
+        echo "ERROR: Windows Terminal (wt/wt.exe) was not found on PATH."
+        echo "Install Windows Terminal or launch the demo components manually in separate terminals from:"
+        echo "  $WIN_ROOT"
+        echo ""
+        echo "Commands to run manually:"
+        echo "  java -cp $WIN_JAR netemu.lan.LAN1"
+        echo "  java -cp $WIN_JAR netemu.lan.LAN2"
+        echo "  java -cp $WIN_JAR netemu.lan.LAN3"
+        echo "  java -cp $WIN_JAR netemu.device.Router"
+        echo "  java -cp $WIN_JAR netemu.device.Node1"
+        echo "  java -cp $WIN_JAR netemu.device.Node2"
+        echo "  java -cp $WIN_JAR netemu.device.Node3"
+        echo "  java -cp $WIN_JAR netemu.device.Node4"
+        exit 1
+    fi
+
+    "$WT_CMD" --title "LAN1" cmd /k "cd /d \"$WIN_ROOT\" && java -cp $WIN_JAR netemu.lan.LAN1"
     echo "[t=0s]  LAN1 opened"
 
     sleep 2
-    wt new-tab --title "LAN2" cmd /k "cd /d \"$WIN_ROOT\" && java -cp $WIN_JAR netemu.lan.LAN2"
+    "$WT_CMD" -w 0 new-tab --title "LAN2" cmd /k "cd /d \"$WIN_ROOT\" && java -cp $WIN_JAR netemu.lan.LAN2"
     echo "[t=2s]  LAN2 opened"
 
     sleep 2
-    wt new-tab --title "LAN3" cmd /k "cd /d \"$WIN_ROOT\" && java -cp $WIN_JAR netemu.lan.LAN3"
+    "$WT_CMD" -w 0 new-tab --title "LAN3" cmd /k "cd /d \"$WIN_ROOT\" && java -cp $WIN_JAR netemu.lan.LAN3"
     echo "[t=4s]  LAN3 opened"
 
     sleep 2
-    wt new-tab --title "Router" cmd /k "cd /d \"$WIN_ROOT\" && java -cp $WIN_JAR netemu.device.Router"
+    "$WT_CMD" -w 0 new-tab --title "Router" cmd /k "cd /d \"$WIN_ROOT\" && java -cp $WIN_JAR netemu.device.Router"
     echo "[t=6s]  Router opened"
 
     sleep 2
-    wt new-tab --title "Node1 [ATTACKER]" cmd /k "cd /d \"$WIN_ROOT\" && java -cp $WIN_JAR netemu.device.Node1"
+    "$WT_CMD" -w 0 new-tab --title "Node1 [ATTACKER]" cmd /k "cd /d \"$WIN_ROOT\" && java -cp $WIN_JAR netemu.device.Node1"
     echo "[t=8s]  Node1 [ATTACKER] opened"
 
     sleep 2
-    wt new-tab --title "Node2 [NORMAL]" cmd /k "cd /d \"$WIN_ROOT\" && java -cp $WIN_JAR netemu.device.Node2"
+    "$WT_CMD" -w 0 new-tab --title "Node2 [NORMAL]" cmd /k "cd /d \"$WIN_ROOT\" && java -cp $WIN_JAR netemu.device.Node2"
     echo "[t=10s] Node2 [NORMAL] opened"
 
     sleep 2
-    wt new-tab --title "Node3 [FIREWALL]" cmd /k "cd /d \"$WIN_ROOT\" && java -cp $WIN_JAR netemu.device.Node3"
+    "$WT_CMD" -w 0 new-tab --title "Node3 [FIREWALL]" cmd /k "cd /d \"$WIN_ROOT\" && java -cp $WIN_JAR netemu.device.Node3"
     echo "[t=12s] Node3 [FIREWALL] opened"
 
     sleep 2
-    wt new-tab --title "Node4 [NORMAL]" cmd /k "cd /d \"$WIN_ROOT\" && java -cp $WIN_JAR netemu.device.Node4"
+    "$WT_CMD" -w 0 new-tab --title "Node4 [NORMAL]" cmd /k "cd /d \"$WIN_ROOT\" && java -cp $WIN_JAR netemu.device.Node4"
     echo "[t=14s] Node4 [NORMAL] opened"
 
 # ---------------------------------------------------------------------------
@@ -141,35 +162,37 @@ elif [ "$OS" = "wsl" ]; then
     WIN_ROOT=$(wslpath -w "$UNIX_ROOT")
     WIN_JAR="target\\netemu-1.0-SNAPSHOT.jar"
 
-    wt.exe --title "LAN1" cmd /k "cd /d \"$WIN_ROOT\" && java -cp $WIN_JAR netemu.lan.LAN1"
+    WT_WINDOW="netemu-demo"
+
+    wt.exe -w "$WT_WINDOW" new-tab --title "LAN1" cmd /k "cd /d \"$WIN_ROOT\" && java -cp $WIN_JAR netemu.lan.LAN1"
     echo "[t=0s]  LAN1 opened"
 
     sleep 2
-    wt.exe new-tab --title "LAN2" cmd /k "cd /d \"$WIN_ROOT\" && java -cp $WIN_JAR netemu.lan.LAN2"
+    wt.exe -w "$WT_WINDOW" new-tab --title "LAN2" cmd /k "cd /d \"$WIN_ROOT\" && java -cp $WIN_JAR netemu.lan.LAN2"
     echo "[t=2s]  LAN2 opened"
 
     sleep 2
-    wt.exe new-tab --title "LAN3" cmd /k "cd /d \"$WIN_ROOT\" && java -cp $WIN_JAR netemu.lan.LAN3"
+    wt.exe -w "$WT_WINDOW" new-tab --title "LAN3" cmd /k "cd /d \"$WIN_ROOT\" && java -cp $WIN_JAR netemu.lan.LAN3"
     echo "[t=4s]  LAN3 opened"
 
     sleep 2
-    wt.exe new-tab --title "Router" cmd /k "cd /d \"$WIN_ROOT\" && java -cp $WIN_JAR netemu.device.Router"
+    wt.exe -w "$WT_WINDOW" new-tab --title "Router" cmd /k "cd /d \"$WIN_ROOT\" && java -cp $WIN_JAR netemu.device.Router"
     echo "[t=6s]  Router opened"
 
     sleep 2
-    wt.exe new-tab --title "Node1 [ATTACKER]" cmd /k "cd /d \"$WIN_ROOT\" && java -cp $WIN_JAR netemu.device.Node1"
+    wt.exe -w "$WT_WINDOW" new-tab --title "Node1 [ATTACKER]" cmd /k "cd /d \"$WIN_ROOT\" && java -cp $WIN_JAR netemu.device.Node1"
     echo "[t=8s]  Node1 [ATTACKER] opened"
 
     sleep 2
-    wt.exe new-tab --title "Node2 [NORMAL]" cmd /k "cd /d \"$WIN_ROOT\" && java -cp $WIN_JAR netemu.device.Node2"
+    wt.exe -w "$WT_WINDOW" new-tab --title "Node2 [NORMAL]" cmd /k "cd /d \"$WIN_ROOT\" && java -cp $WIN_JAR netemu.device.Node2"
     echo "[t=10s] Node2 [NORMAL] opened"
 
     sleep 2
-    wt.exe new-tab --title "Node3 [FIREWALL]" cmd /k "cd /d \"$WIN_ROOT\" && java -cp $WIN_JAR netemu.device.Node3"
+    wt.exe -w "$WT_WINDOW" new-tab --title "Node3 [FIREWALL]" cmd /k "cd /d \"$WIN_ROOT\" && java -cp $WIN_JAR netemu.device.Node3"
     echo "[t=12s] Node3 [FIREWALL] opened"
 
     sleep 2
-    wt.exe new-tab --title "Node4 [NORMAL]" cmd /k "cd /d \"$WIN_ROOT\" && java -cp $WIN_JAR netemu.device.Node4"
+    wt.exe -w "$WT_WINDOW" new-tab --title "Node4 [NORMAL]" cmd /k "cd /d \"$WIN_ROOT\" && java -cp $WIN_JAR netemu.device.Node4"
     echo "[t=14s] Node4 [NORMAL] opened"
 
 # ---------------------------------------------------------------------------
