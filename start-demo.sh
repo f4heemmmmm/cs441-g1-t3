@@ -164,7 +164,7 @@ elif [ "$OS" = "wsl" ]; then
 
     WT_WINDOW="netemu-demo"
 
-    wt.exe -w "$WT_WINDOW" new-tab --title "LAN1" cmd /k "cd /d \"$WIN_ROOT\" && java -cp $WIN_JAR netemu.lan.LAN1"
+    wt.exe --title "LAN1" cmd /k "cd /d \"$WIN_ROOT\" && java -cp $WIN_JAR netemu.lan.LAN1"
     echo "[t=0s]  LAN1 opened"
 
     sleep 2
