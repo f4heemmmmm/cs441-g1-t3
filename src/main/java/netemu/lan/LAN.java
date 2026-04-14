@@ -106,7 +106,7 @@ public class LAN {
                 return false;
             }
 
-            MACAddress expectedMACAddress = AddressTable.resolve(arp.senderIP());
+            MACAddress expectedMACAddress = AddressTable.resolve(arp.senderIP()).orElse(null);
             boolean payloadMismatch = !expectedMACAddress.equals(arp.senderMAC());
             boolean frameMismatch = !expectedMACAddress.equals(frame.sourceMACAddress());
 
