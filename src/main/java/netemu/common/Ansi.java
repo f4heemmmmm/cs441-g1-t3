@@ -22,11 +22,27 @@ public final class Ansi {
     public static String cyan(String s)   { return CYAN + s + RESET; }
     public static String bold(String s)   { return BOLD + s + RESET; }
 
-    /** Print a startup banner for a component. */
+    /**
+     * Print a startup banner for a component. The whole banner is emitted as
+     * one synchronized block so concurrent receiver/CLI threads can't break
+     * the box.
+     */
     public static void banner(String name, String color) {
-        String line = "=".repeat(50);
-        System.out.println(color + line);
-        System.out.println("  " + name);
-        System.out.println(line + RESET);
+        String top    = "╔" + "═".repeat(60) + "╗";
+        String middle = "║  " + padRight(name, 56) + "  ║";
+        String bot    = "╚" + "═".repeat(60) + "╝";
+        synchronized (System.out) {
+            System.out.println();
+            System.out.println(color + top    + RESET);
+            System.out.println(color + middle + RESET);
+            System.out.println(color + bot    + RESET);
+        }
+    }
+
+    private static String padRight(String s, int width) {
+        if (s.length() >= width) return s.substring(0, width);
+        StringBuilder sb = new StringBuilder(s);
+        while (sb.length() < width) sb.append(' ');
+        return sb.toString();
     }
 }

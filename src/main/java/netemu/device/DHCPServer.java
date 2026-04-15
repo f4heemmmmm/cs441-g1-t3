@@ -13,6 +13,7 @@ import java.util.HashSet;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.function.Consumer;
 
 /**
  * DHCP server bound to a single router LAN interface. Owns an address pool and
@@ -32,6 +33,7 @@ public final class DHCPServer {
     private final Set<IPAddress> reserved = new HashSet<>();
     private final Map<MACAddress, Lease> leases = new HashMap<>();
     private final Map<MACAddress, IPAddress> offered = new HashMap<>();
+    private volatile Consumer<MACAddress> onLeaseExpired = mac -> {};
 
     public DHCPServer(int lanID, IPAddress serverIP, int leaseSecs, Log log) {
         this.lanID = lanID;
@@ -92,7 +94,11 @@ public final class DHCPServer {
             return Optional.of(DHCPMessage.offer(msg.xid(), client, prevOffer, serverIP, leaseSecs));
         }
 
-        IPAddress assigned = pool.pollFirst();
+        // Prefer the spec-mandated IP for this client if it is still available in the pool.
+        // This makes DHCP deterministic against the topology without sacrificing the feature.
+        IPAddress assigned = AddressTable.preferredIPFor(client)
+            .filter(pool::remove)
+            .orElseGet(pool::pollFirst);
         if (assigned == null) {
             log.warn("DHCP[LAN" + lanID + "]: pool exhausted — no offer for " + client);
             return Optional.empty();
@@ -156,12 +162,23 @@ public final class DHCPServer {
             var entry = it.next();
             if (entry.getValue().expiresAt <= nowMillis) {
                 IPAddress ip = entry.getValue().ip;
+                MACAddress mac = entry.getKey();
                 pool.addLast(ip);
                 AddressTable.unbind(ip);
-                log.warn("DHCP[LAN" + lanID + "]: lease expired — " + ip + " reclaimed from " + entry.getKey());
+                log.warn("DHCP[LAN" + lanID + "]: lease expired — " + ip + " reclaimed from " + mac);
                 it.remove();
+                onLeaseExpired.accept(mac);
             }
         }
+    }
+
+    /**
+     * Register a callback invoked whenever a lease is reaped due to expiry. The
+     * router uses this to notify the IDS so that snooped MAC-IP bindings stay in
+     * sync with the actual lease state.
+     */
+    public void setOnLeaseExpired(Consumer<MACAddress> consumer) {
+        this.onLeaseExpired = consumer == null ? mac -> {} : consumer;
     }
 
     public synchronized int poolSize() { return pool.size(); }

@@ -53,14 +53,20 @@ public class Firewall {
     }
 
     public void printStatus() {
-        System.out.println("  Firewall:    " + (enabled ? "ON (filtering)" : "OFF (disabled)"));
+        // Build the full status box first, then emit it as one atomic block
+        // so concurrent receiver/security log lines can't break it up.
+        java.util.List<String> lines = new java.util.ArrayList<>();
+        lines.add("┌─ Firewall Status ────────────────────");
+        lines.add("│  State      : " + (enabled ? "ON  (filtering)" : "OFF (disabled)"));
         if (blockedSourceIPAddressesList.isEmpty()) {
-            System.out.println("  Blocked IPs: (none)");
+            lines.add("│  Blocked IPs: (none)");
         } else {
-            System.out.println("  Blocked IPs:");
+            lines.add("│  Blocked IPs:");
             for (IPAddress ipAddress : blockedSourceIPAddressesList) {
-                System.out.println("    - " + ipAddress);
+                lines.add("│    • " + ipAddress);
             }
         }
+        lines.add("└──────────────────────────────────────");
+        log.block(lines.toArray(new String[0]));
     }
 }

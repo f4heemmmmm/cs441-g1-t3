@@ -53,6 +53,11 @@ public class Router {
         dhcpServer1 = new DHCPServer(1, AddressTable.IP_R1, log);
         dhcpServer2 = new DHCPServer(2, AddressTable.IP_R2, log);
         dhcpServer3 = new DHCPServer(3, AddressTable.IP_R3, log);
+        // Keep the IDS's snooped bindings in sync with actual lease state — when
+        // a lease is reaped, the matching MAC-IP binding is forgotten too.
+        dhcpServer1.setOnLeaseExpired(IDS::forgetDHCPLease);
+        dhcpServer2.setOnLeaseExpired(IDS::forgetDHCPLease);
+        dhcpServer3.setOnLeaseExpired(IDS::forgetDHCPLease);
 
         register(socket1, LAN1Address, networkInterfaceCardRouter1);
         register(socket2, LAN2Address, networkInterfaceCardRouter2);
@@ -112,16 +117,21 @@ public class Router {
             return;
         }
 
-        log.rx(frame + " on " + incomingNetworkInterfaceCard.macAddress());
-        log.info("  └─ " + packet);
-
         // DHCP traffic is handled by the per-LAN DHCP server before any IDS or
         // routing logic. DHCP frames are broadcast and not "addressed to" the
-        // router in the conventional sense.
+        // router in the conventional sense. handleDHCP emits its own atomic
+        // 3-line RX tree (frame + packet + DHCP message).
         if (packet.protocol() == IPPacket.PROTOCOL_DHCP) {
-            handleDHCP(packet, incomingNetworkInterfaceCard);
+            handleDHCP(frame, packet, incomingNetworkInterfaceCard);
             return;
         }
+
+        // For all non-DHCP traffic, log a single atomic 2-line RX tree so the
+        // packet child stays attached to its frame parent under concurrency.
+        log.event(
+            "RX " + frame + " on " + incomingNetworkInterfaceCard.macAddress(),
+            "  └─ " + packet
+        );
 
         // IDS Inspection
         if (IDS.isEnabled()) {
@@ -138,7 +148,7 @@ public class Router {
         }
     }
 
-    private void handleDHCP(IPPacket packet, NetworkInterface incomingNetworkInterfaceCard) {
+    private void handleDHCP(EthernetFrame frame, IPPacket packet, NetworkInterface incomingNetworkInterfaceCard) {
         DHCPMessage msg;
         try {
             msg = DHCPMessage.decode(packet.data());
@@ -146,7 +156,13 @@ public class Router {
             log.error("Failed to decode DHCP message: " + e.getMessage());
             return;
         }
-        log.info("     └─ " + msg);
+        // Emit the full 3-line RX tree (frame → packet → DHCP message) atomically
+        // so concurrent DHCP traffic from multiple LANs doesn't interleave.
+        log.event(
+            "RX " + frame + " on " + incomingNetworkInterfaceCard.macAddress(),
+            "  └─ " + packet,
+            "     └─ " + msg
+        );
 
         DHCPServer server = dhcpServerForLAN(incomingNetworkInterfaceCard.lanID());
         if (server == null) {
@@ -172,14 +188,16 @@ public class Router {
         // IP and addressed to the client's MAC at the link layer.
         IPPacket replyPacket = IPPacket.dhcp(incomingNetworkInterfaceCard.ipAddress(), DHCPMessage.BROADCAST_IP, reply.encode());
         try {
-            EthernetFrame frame = new EthernetFrame(incomingNetworkInterfaceCard.macAddress(), reply.clientMAC(), replyPacket.encode());
-            byte[] data = frame.encode();
+            EthernetFrame replyFrame = new EthernetFrame(incomingNetworkInterfaceCard.macAddress(), reply.clientMAC(), replyPacket.encode());
+            byte[] data = replyFrame.encode();
             InetSocketAddress target = LANAddressforNetworkInterfaceCard(incomingNetworkInterfaceCard);
             DatagramPacket udp = new DatagramPacket(data, data.length, target);
             socketForNic(incomingNetworkInterfaceCard).send(udp);
-            log.tx(frame.toString());
-            log.info("  └─ " + replyPacket);
-            log.info("     └─ " + reply);
+            log.event(
+                "TX " + replyFrame,
+                "  └─ " + replyPacket,
+                "     └─ " + reply
+            );
         } catch (Exception e) {
             log.error("Failed to send DHCP reply: " + e.getMessage());
         }
@@ -251,8 +269,10 @@ public class Router {
             MACAddress destinationMACAddress = resolved.get();
             EthernetFrame frame = new EthernetFrame(outgoingNetworkInterfaceCard.macAddress(), destinationMACAddress, packet.encode());
             sendRawFrameToLAN(frame, outgoingNetworkInterfaceCard);
-            log.tx(frame.toString());
-            log.info("  └─ " + packet);
+            log.event(
+                "TX " + frame,
+                "  └─ " + packet
+            );
         } catch (Exception e) {
             log.error("Failed to forward packet: " + e.getMessage());
         }
@@ -377,20 +397,27 @@ public class Router {
     }
 
     private void printHelp() {
-        System.out.println("\n--- Router Commands ---");
-        System.out.println("  ping <destIP> [count <n>]      - Send ping(s)");
-        System.out.println("  ids on|off                     - Enable/disable IDS");
-        System.out.println("  ids mode active|passive        - Set IDS mode");
-        System.out.println("  ids status                     - Show IDS status");
-        System.out.println("  info                           - Show interface info");
-        System.out.println("  help                           - Show this help");
-        System.out.println("  quit                           - Exit");
+        log.block(
+            "┌─ Router Commands ─────────────────────────────────────",
+            "│  ping <destIP> [count <n>]   Send ping(s)",
+            "│  ids on | off                Enable / disable IDS",
+            "│  ids mode active | passive   Set IDS mode",
+            "│  ids status                  Show IDS status",
+            "│  info                        Show interface info",
+            "│  help                        Show this help",
+            "│  quit                        Exit",
+            "└───────────────────────────────────────────────────────"
+        );
     }
 
     private void printInfo() {
-        System.out.println("  R1: " + networkInterfaceCardRouter1);
-        System.out.println("  R2: " + networkInterfaceCardRouter2);
-        System.out.println("  R3: " + networkInterfaceCardRouter3);
+        log.block(
+            "┌─ Router Interfaces ───────────────────",
+            "│  R1: " + networkInterfaceCardRouter1,
+            "│  R2: " + networkInterfaceCardRouter2,
+            "│  R3: " + networkInterfaceCardRouter3,
+            "└───────────────────────────────────────"
+        );
     }
 
     public static void main(String[] args) throws IOException {

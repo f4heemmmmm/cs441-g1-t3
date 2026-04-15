@@ -9,6 +9,7 @@
 - [5. Component Descriptions](#5-component-descriptions)
 - [6. How to Build](#6-how-to-build)
 - [7. How to Run (Step by Step)](#7-how-to-run-step-by-step)
+  - [Quick Start — `start-demo.sh`](#quick-start-recommended--start-demosh)
 - [8. CLI Command Reference](#8-cli-command-reference)
 - [9. Demo Scenarios](#9-demo-scenarios)
   - [Demo 1 — Intra-LAN Ping](#demo-1--intra-lan-ping-node1--node2-same-lan)
@@ -118,9 +119,15 @@ Each network device (node, router, LAN emulator) runs as a **separate Java proce
 high nibble. LAN1's pool is `0x12`–`0x1F` (14 addresses), LAN2's pool is
 `0x22`–`0x2F`, LAN3's pool is `0x32`–`0x3F`. The low-nibble value `_1` is
 reserved for the router gateway on each LAN (`0x11`, `0x21`, `0x31`) and `_0`
-is reserved as the "unassigned" sentinel. The IP addresses in the table above
-are the **typical first lease** each node receives — when nodes are restarted
-in a different order, they may receive different addresses from the pool.
+is reserved as the "unassigned" sentinel.
+
+**Spec-pinned MAC→IP bindings:** Each known node MAC has a preferred IP that
+the DHCP server hands out whenever it is still free. `N1` always receives
+`0x12`, `N2` always `0x13`, `N3` always `0x22`, and `N4` always `0x32` — so
+the address table above is **deterministic** regardless of boot order. This
+keeps the project's topology stable for grading while preserving DHCP as an
+open-category feature. Unknown MACs (e.g. extra clients you spin up to
+exhaust the pool) fall back to FIFO allocation.
 
 ---
 
@@ -370,7 +377,34 @@ mvn test
 
 ## 7. How to Run (Step by Step)
 
-You need **8 separate terminal windows** (or tabs). Start the processes in the order below.
+You need **8 separate terminal windows** (or tabs). Start the processes in
+the order below — or use the included launcher to open all eight at once.
+
+### Quick Start (recommended) — `start-demo.sh`
+
+The repository ships a launcher that opens 8 terminal tabs in the right
+order with a 2-second gap between each. From the project root:
+
+```bash
+bash start-demo.sh
+```
+
+Supported environments:
+
+| OS | What it does |
+|----|--------------|
+| **macOS** | Opens a fresh Terminal window, then opens 7 more tabs with `osascript`. |
+| **Windows (Git Bash / MSYS2)** | Uses `wt` (Windows Terminal) to spawn each process in its own tab. Falls back to printing the manual commands if `wt` is missing. |
+| **WSL** | Uses `wt.exe` from inside WSL with `wslpath` translation. |
+| **Other Linux** | Not auto-supported — use the manual instructions below. |
+
+The script preflight-checks that `target/netemu-1.0-SNAPSHOT.jar` exists; if
+it doesn't, run `mvn clean package` first. After the script returns, wait
+for every node terminal to print its second startup banner (the one showing
+the leased IP after `DHCP: ACK …`) before sending any commands.
+
+If anything goes wrong with auto-launching, fall back to the manual steps
+below — they do exactly the same thing, one terminal at a time.
 
 ### Step 1 — Start the three LAN Emulators
 
@@ -441,16 +475,11 @@ Each node runs DHCP by default. Add `--static` after the class name to use the
 legacy hardcoded IPs (useful for debugging or for demonstrating the trade-off
 in Demo 17).
 
-**Boot order matters for predictable IP assignment.** The DHCP server hands
-out addresses from the LAN pool in FIFO order. If you want the demo IPs in
-the address table to match exactly (Node1 → `0x12`, Node2 → `0x13`, etc.),
-start the nodes **one at a time** in order: Node1 → Node2 → Node3 → Node4,
-with a brief pause (a second is plenty) between each so the DHCPACK lands
-before the next node DISCOVERs. If you start them in parallel (e.g., from a
-script), the first node to win the broadcast race gets `0x12`, the second
-gets `0x13`, and so on — which may not be the order of `Node1` → `Node4`.
-Use `info` on each node to confirm what it actually received, or substitute
-the actual IPs in the demo commands.
+**Boot order does not matter for IP assignment.** The DHCP server consults
+the spec-pinned MAC→IP map (see Section 3) for every DISCOVER, so `N1`
+always lands on `0x12`, `N2` on `0x13`, `N3` on `0x22`, and `N4` on `0x32`,
+regardless of which node DISCOVERs first. You can boot them in any order or
+in parallel from a script. Use `info` on any node to confirm.
 
 **Terminal 5 — Node1 (Attacker):**
 ```bash
@@ -491,12 +520,17 @@ HH:mm:ss.SSS [Node1] DHCP: ACK — leased 0x12 for 60s (gateway 0x11)
 
 --- Node1 Commands ---
   ping <destIP> [count <n>]  - Send ping(s)
+  arp show                   - Show learned ARP cache
+  arp resolve <ip>           - Send ARP request for an IP
   msg <destIP> <text>        - Send plaintext message
   emsg <destIP> <text>       - Send encrypted message
   info                       - Show interface info
   help                       - Show this help
   quit                       - Exit
   spoof on <IP> | off        - Enable/disable IP spoofing
+  arpspoof on <victim> <ip>  - Continuously poison victim ARP cache
+  arpspoof once <victim> <ip>- Send one forged ARP reply
+  arpspoof off               - Disable ARP spoofing
   sniff on | off             - Enable/disable promiscuous sniffing
   flood <destIP> <count>     - Send ping flood
 ```
@@ -536,7 +570,9 @@ Ctrl+C for an immediate one.
 
 | Command | Description |
 |---------|-------------|
-| `ping <destIP> [count <n>]` | Send `n` ICMP echo requests to `destIP` (hex, e.g., `0x22`). Default count is 1. |
+| `ping <destIP> [count <n>]` | Send `n` ICMP echo requests to `destIP` (hex, e.g., `0x22`). Default count is 1. Same-LAN destinations are ARP-resolved at send time; cross-LAN destinations go to the local router gateway. |
+| `arp show` | Print this node's ARP cache (IP → MAC entries learned from observed ARP replies and DHCPACKs). |
+| `arp resolve <ip>` | Broadcast an ARP request for `<ip>`. Useful for warming the cache or testing the ARP module. |
 | `msg <destIP> <text>` | Send a **plaintext** text message to `destIP`. The message text is everything after the IP address. |
 | `emsg <destIP> <text>` | Send an **encrypted** text message to `destIP`. Uses XOR cipher — content is unreadable by sniffers. |
 | `info` | Print this device's MAC, IP, LAN, and port number. |
@@ -549,6 +585,9 @@ Ctrl+C for an immediate one.
 |---------|-------------|
 | `spoof on <IP>` | Enable IP spoofing — all outgoing packets will use `<IP>` as source IP instead of `0x12`. |
 | `spoof off` | Disable IP spoofing — resume using the real source IP. |
+| `arpspoof on <victim> <claimed>` | Continuously poison `<victim>`'s ARP cache by claiming the `<claimed>` IP belongs to Node1's MAC. Sets up a man-in-the-middle position for traffic the victim sends to `<claimed>`. |
+| `arpspoof once <victim> <claimed>` | Send a single forged ARP reply (one-shot version of the above). |
+| `arpspoof off` | Stop the poisoning loop. |
 | `sniff on` | Enable promiscuous mode — log all LAN1 frames, even those addressed to other MACs. |
 | `sniff off` | Disable promiscuous mode — resume normal MAC filtering. |
 | `flood <destIP> <count>` | Send `<count>` ping requests to `<destIP>` as fast as possible (no 1-second delay between pings). |
@@ -1290,16 +1329,21 @@ This is the core **confidentiality** demonstration. Encryption is the primary de
 
 #### Steps
 
+The legitimate receiver in this scenario must be a **Node** — the Router
+forwards DATA packets but does not decode them, so we send to Node4 (`0x32`)
+on LAN3. The frame still crosses LAN1 (where Node1 is sniffing) on its way
+to the router, so the sniffer captures it.
+
 **Step 1 — Enable sniffing on Node1:**
 ```
 sniff on
 ```
 
-**Step 2 — Send a plaintext message from Node2 to Node4 (same-LAN Node2 -> router -> Node4):**
+**Step 2 — Send a plaintext message from Node2 to Node4:**
 
 On Node2:
 ```
-msg 0x11 Secret plans inside
+msg 0x32 Secret plans inside
 ```
 
 **Step 3 — Observe that Node1 captures the plaintext:**
@@ -1307,7 +1351,7 @@ msg 0x11 Secret plans inside
 Node1 sees:
 ```
 HH:mm:ss.SSS [Node1] [Sniffed] Frame [N2 -> R1 | 25 bytes]
-HH:mm:ss.SSS [Node1]   └─ Packet [0x13 -> 0x11 | DATA | 20 bytes]
+HH:mm:ss.SSS [Node1]   └─ Packet [0x13 -> 0x32 | DATA | 21 bytes]
 HH:mm:ss.SSS [Node1]      └─ Message [PLAIN] "Secret plans inside"
 ```
 
@@ -1317,31 +1361,46 @@ The sniffer can read the message in full!
 
 On Node2:
 ```
-emsg 0x11 Secret plans inside
+emsg 0x32 Secret plans inside
 ```
 
 **Step 5 — Observe that Node1 cannot read the encrypted message:**
 
-Node1 sees:
+Node1 sees something like:
 ```
 HH:mm:ss.SSS [Node1] [Sniffed] Frame [N2 -> R1 | 25 bytes]
-HH:mm:ss.SSS [Node1]   └─ Packet [0x13 -> 0x11 | DATA | 20 bytes]
-HH:mm:ss.SSS [Node1]      └─ Message [ENCRYPTED] "..." (cannot read — encrypted)
+HH:mm:ss.SSS [Node1]   └─ Packet [0x13 -> 0x32 | DATA | 21 bytes]
+HH:mm:ss.SSS [Node1]      └─ Message [ENCRYPTED] "	?9(?.z*6;4)z34)3>?" (cannot read — encrypted)
 ```
 
-The encrypted text appears as garbled characters. The sniffer knows a message was sent and that it's encrypted, but cannot read the contents.
+The encrypted text appears as garbled characters (the exact bytes you see
+will look slightly different in your terminal — XOR with `0x5A` produces
+non-printable codes). The sniffer knows a message was sent and that it's
+encrypted, but cannot read the contents.
 
-**Meanwhile, the Router (legitimate receiver) can decrypt:**
+**Meanwhile, Node4 (the legitimate receiver) decrypts the message normally:**
 ```
-HH:mm:ss.SSS [Router] RX Encrypted message from 0x13: "Secret plans inside"
+HH:mm:ss.SSS [Node4] RX Frame [R3 -> N4 | 25 bytes]
+HH:mm:ss.SSS [Node4]   └─ Packet [0x13 -> 0x32 | DATA | 21 bytes]
+HH:mm:ss.SSS [Node4] RX Encrypted message from 0x13: "Secret plans inside"
 ```
+
+Node4 sees the same `[ENCRYPTED]` frame on the wire but uses the shared
+XOR key to recover the original plaintext. The receiver log line begins
+with `RX Encrypted message …` (instead of `RX Message …` for plaintext) so
+you can tell the two modes apart at a glance.
+
+(Demo 11's plaintext path produces `RX Message from 0x13: "Hello from Node2!"`
+on Node3; this demo's encrypted path produces `RX Encrypted message from …`
+on Node4. The sniffer distinguishes them via the `[PLAIN]`/`[ENCRYPTED]`
+tag from `TextMessage.toString()`.)
 
 #### Key takeaway
 
-| Message type | Sniffer (Node1) can read? | Receiver can read? |
-|-------------|--------------------------|-------------------|
+| Message type | Sniffer (Node1) can read? | Receiver (Node4) can read? |
+|-------------|--------------------------|-----------------------------|
 | Plaintext (`msg`) | Yes — full content visible | Yes |
-| Encrypted (`emsg`) | No — only sees garbled text | Yes — decrypts automatically |
+| Encrypted (`emsg`) | No — only sees garbled bytes | Yes — decrypts on arrival |
 
 **Clean up:**
 ```
@@ -1600,59 +1659,80 @@ spoof off
 
 #### What we are simulating
 
-The default DHCP lease in this emulator is 60 seconds, and the current
-client has no auto-renewal. We let the lease expire on purpose and observe
-that the IDS loses its snooped binding for the expired client, weakening
-the spoof protection until that node re-acquires a lease.
+The default DHCP lease in this emulator is 60 seconds and the client has
+no auto-renewal. We let a lease expire on purpose and observe that the IDS
+loses its snooped binding for the expired client, weakening the same-LAN
+spoof check until that node re-acquires a lease.
 
 #### Why this matters
 
 This is the educational "why renewal exists" moment. It shows directly that
 DHCP snooping is only as accurate as the lease state itself — once a lease
-times out, the snooped binding must be evicted, otherwise the IDS could
-either false-positive on the next legitimate lease (if it kept stale
-bindings) or false-negative on a same-LAN spoof (because no binding exists
-to compare against). The emulator chooses correctness over availability:
-expired bindings are dropped, and the same-LAN spoof becomes detectable
-again only after a new lease is issued.
+times out, the snooped binding must be evicted, otherwise the IDS would
+false-positive on a re-issued lease or false-negative on a same-LAN spoof.
+The emulator wires `DHCPServer.setOnLeaseExpired(IDS::forgetDHCPLease)` in
+`Router.start()`, so every reaped lease immediately invalidates the
+matching snooped binding.
+
+#### Lazy reap caveat
+
+`expireLeases()` is called at the **top of every `handle(...)` call** on the
+DHCP server. If no DHCP traffic arrives on a LAN after expiry time, the
+expired lease — and its snooped binding — sits there until the next DHCP
+message wakes the reaper. The simplest way to force a reap during a demo
+is to restart any node on the same LAN (its DISCOVER triggers
+`expireLeases()` as a side effect).
 
 #### Steps
 
-1. Boot the full system. Wait for all four nodes to acquire leases.
-2. Confirm with `ids status` on the Router — you should see four snooped
+1. Boot the full system in DHCP mode. Wait for all four nodes to acquire
+   leases. Run `ids status` on the Router — you should see four snooped
    leases.
-3. Wait approximately 70 seconds without sending any traffic.
-4. Watch the Router log — it will eventually print lease expiry messages.
-5. Run `ids status` again — the snooped lease count should be lower (or
-   zero, if all four expired).
-6. Now from Node1: `spoof on 0x13` and `ping 0x22`.
-7. The IDS no longer has a binding for `N2 -> 0x13`, so the same-LAN spoof
-   check finds nothing to compare against and the alert does **not** fire
-   (the cross-LAN check still passes — both addresses are LAN1).
+2. Wait approximately **65 seconds** (the default lease is 60 s).
+3. On any node terminal, run `quit` then restart that node — e.g.,
+   `quit` on Node2, then in a fresh terminal:
+   ```
+   java -cp target/netemu-1.0-SNAPSHOT.jar netemu.device.Node2
+   ```
+   The router receives Node2's new DISCOVER, runs `expireLeases()` first,
+   reaps every stale LAN1 lease (Node1's `0x12` and the now-stale Node2
+   entry), and the expiry callback notifies the IDS — which prints
+   `IDS snoop: forgot N1 -> 0x12` etc.
+4. Run `ids status` on the Router — the snooped lease count should be
+   lower than four (Node2 will re-appear after its REQUEST/ACK).
+5. From Node1: `spoof on 0x13` then `ping 0x22`.
+6. With Node1's snooped binding evicted, the same-LAN spoof check finds
+   no `N1` entry, the second branch of the check finds no `0x13` entry
+   (until Node2 finishes its handshake), and the spoof slips through.
 
 #### Expected output
 
-**Router terminal during expiry:**
+**Router terminal during the reap:**
 ```
 HH:mm:ss.SSS [Router] WARN: DHCP[LAN1]: lease expired — 0x12 reclaimed from N1
+HH:mm:ss.SSS [Router] IDS snoop: forgot N1 -> 0x12
 HH:mm:ss.SSS [Router] WARN: DHCP[LAN1]: lease expired — 0x13 reclaimed from N2
+HH:mm:ss.SSS [Router] IDS snoop: forgot N2 -> 0x13
+HH:mm:ss.SSS [Router] DHCP[LAN1]: offering 0x13 to N2
+…
+HH:mm:ss.SSS [Router] IDS snoop: learned N2 -> 0x13
 ```
 
-(Note that lease expiry is checked lazily — the next time a DHCP message
-is processed on that LAN, expired leases are reaped. If no DHCP traffic
-arrives, the AddressTable will still hold stale bindings until the next
-DHCP exchange. To force expiry quickly during a demo, send any DHCP message
-via a node restart.)
-
-**After expiry, `ids status`:**
+**`ids status` immediately after the reap, before Node2's REQUEST lands:**
 ```
   IDS:            ON (monitoring)
   Mode:           ACTIVE (log + drop)
-  Snooped leases: 0
+  Snooped leases: 2
+    N3 -> 0x22
+    N4 -> 0x32
   Spoof alerts:   0
   MAC-IP alerts:  0
   Flood alerts:   0
 ```
+
+(The exact count depends on whether Node2 has already completed REQUEST/ACK.
+The point is that the LAN1 entries are gone after the reap and re-appear
+only as nodes re-handshake.)
 
 **Then Node1's spoof attack:**
 The packet is forwarded normally. No IDS alert. This is the failure mode
@@ -1660,9 +1740,8 @@ that DHCP renewal is designed to prevent.
 
 #### Suggested follow-up
 
-Restart Node2 in DHCP mode. The router issues a fresh lease, the IDS
-re-learns the `N2 -> 0x13` binding, and the spoof becomes detectable
-again. This makes the cause-and-effect crystal clear.
+Restart Node1 in DHCP mode. The router issues a fresh lease, the IDS
+re-learns `N1 -> 0x12`, and the same-LAN spoof becomes detectable again.
 
 ---
 
@@ -1766,5 +1845,8 @@ mvn test
 | `FirewallTest` | 9 | Enabled by default, block/unblock rules, disabled bypasses rules, re-enable restores rules, multiple blocked sources, snapshot immutability, idempotent block |
 | `IntrusionDetectionSystemTest` | 17 | Disabled by default, passive/active cross-LAN spoof detection, MAC-IP binding mismatch via snooped bindings (same-LAN spoofing), combined cross-LAN + MAC-IP alerts, legitimate packets pass, flood threshold trigger, passive flood (no drop), alert counter accumulation, snooped binding learn/forget, unknown-MAC skip (no false positive), reverse-direction MAC-IP check, lease forgetting removes protection |
 | `DHCPServerTest` | 15 | Pool excludes gateway, DISCOVER → OFFER, REQUEST → ACK, ACK updates `AddressTable`, REQUEST for unknown IP → NAK, duplicate DISCOVER idempotent, pool exhaustion returns empty, RELEASE returns address to pool, RENEW extends lease, RENEW for unknown client → NAK, expired leases reclaimed, `leaseFor()` lookup, re-DISCOVER with existing lease, gateway IP / LAN ID accessors, single-DISCOVER pool decrement |
+| `DHCPClientIntegrationTest` | 1 | End-to-end DISCOVER → OFFER → REQUEST → ACK handshake against a live `DHCPServer`, confirming the client mutates `NetworkInterface.assignIP()` and `AddressTable` on success |
 | `NetworkInterfaceTest` | 4 | Field access, toString content, equality, inequality |
+
+Per-class totals: 19+11+17+10+13+15+12+12+15+15+1+9+17+4 = **170** (with `AddressTableTest=19`, `ByteUtilTest=11`, etc.).
 | `DHCPClientIntegrationTest` | 1 | End-to-end DHCP handshake over real UDP sockets — boots a real `LAN` emulator, a fake router running an actual `DHCPServer`, and a real `DHCPClient`. Verifies the client acquires a lease, the NIC ends up with a valid leased IP, and `AddressTable.resolve` reflects the new binding. |

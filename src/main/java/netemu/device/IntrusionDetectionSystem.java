@@ -48,14 +48,16 @@ public class IntrusionDetectionSystem {
     public boolean inspect(IPPacket packet, EthernetFrame frame, NetworkInterface incomingNetworkInterfaceCard) {
         if (!enabled) return false;
 
-        boolean suspicious = false;
+        // Collect every alert this packet trips so the whole verdict can be
+        // emitted as one atomic SECURITY event (alert lines + drop action),
+        // keeping multi-trigger alerts visually grouped under concurrency.
+        java.util.List<String> alerts = new java.util.ArrayList<>();
 
         // Check 1: Spoof Detection (cross-LAN)
         // The LAN ID of the source IP Address should match the LAN ID of the incoming interface
         if (packet.sourceIPAddress().lanID() != incomingNetworkInterfaceCard.lanID()) {
             spoofAlerts.incrementAndGet();
-            log.security("IDS Alert — IP spoof detected: " + packet.sourceIPAddress() + " claims LAN" + packet.sourceIPAddress().lanID() + " but arrived on LAN" + incomingNetworkInterfaceCard.lanID() + " (MAC: " + frame.sourceMACAddress() + ")");
-            suspicious = true;
+            alerts.add("IDS Alert — IP spoof detected: " + packet.sourceIPAddress() + " claims LAN" + packet.sourceIPAddress().lanID() + " but arrived on LAN" + incomingNetworkInterfaceCard.lanID() + " (MAC: " + frame.sourceMACAddress() + ")");
         }
 
         // Check 2: MAC-IP Binding Verification (same-LAN spoof detection)
@@ -67,15 +69,13 @@ public class IntrusionDetectionSystem {
         IPAddress snoopedIP = snoopedBindings.get(frame.sourceMACAddress());
         if (snoopedIP != null && !snoopedIP.equals(packet.sourceIPAddress())) {
             macIpAlerts.incrementAndGet();
-            log.security("IDS Alert — MAC-IP mismatch: " + frame.sourceMACAddress() + " sent packet with source IP " + packet.sourceIPAddress() + " (snooped lease: " + snoopedIP + ")");
-            suspicious = true;
+            alerts.add("IDS Alert — MAC-IP mismatch: " + frame.sourceMACAddress() + " sent packet with source IP " + packet.sourceIPAddress() + " (snooped lease: " + snoopedIP + ")");
         } else {
-            // Check the reverse: is some other MAC currently leased the source IP?
+            // Reverse check: is some other MAC currently leased the source IP?
             for (var entry : snoopedBindings.entrySet()) {
                 if (entry.getValue().equals(packet.sourceIPAddress()) && !entry.getKey().equals(frame.sourceMACAddress())) {
                     macIpAlerts.incrementAndGet();
-                    log.security("IDS Alert — MAC-IP mismatch: " + frame.sourceMACAddress() + " sent packet with source IP " + packet.sourceIPAddress() + " (lease belongs to MAC: " + entry.getKey() + ")");
-                    suspicious = true;
+                    alerts.add("IDS Alert — MAC-IP mismatch: " + frame.sourceMACAddress() + " sent packet with source IP " + packet.sourceIPAddress() + " (lease belongs to MAC: " + entry.getKey() + ")");
                     break;
                 }
             }
@@ -88,18 +88,22 @@ public class IntrusionDetectionSystem {
                 FloodTracker tracker = pingTrackers.computeIfAbsent(packet.sourceIPAddress(), k -> new FloodTracker());
                 if (tracker.recordAndCheck()) {
                     floodAlerts.incrementAndGet();
-                    log.security("IDS Alert — Ping flood detected: " + tracker.recentCount() + " pings from " + packet.sourceIPAddress() + " in " + PING_FLOOD_WINDOW_MS + "ms (threshold: " + PING_FLOOD_THRESHOLD + ")");
-                    suspicious = true;
+                    alerts.add("IDS Alert — Ping flood detected: " + tracker.recentCount() + " pings from " + packet.sourceIPAddress() + " in " + PING_FLOOD_WINDOW_MS + "ms (threshold: " + PING_FLOOD_THRESHOLD + ")");
                 }
             }
         }
 
-        // In Active Mode, drop suspicious packets
-        if (suspicious && activeMode) {
-            log.security("IDS Action — Dropped packet from " + packet.sourceIPAddress());
-            return true;
+        if (alerts.isEmpty()) return false;
+
+        boolean drop = activeMode;
+        if (drop) {
+            alerts.add("IDS Action — Dropped packet from " + packet.sourceIPAddress());
         }
-        return false;
+        // Atomic security event so the alert lines + drop verdict stay together.
+        String first = alerts.get(0);
+        String[] rest = alerts.subList(1, alerts.size()).toArray(new String[0]);
+        log.securityEvent(first, rest);
+        return drop;
     }
 
     /**
@@ -155,15 +159,26 @@ public class IntrusionDetectionSystem {
     }
 
     public void printStatus() {
-        System.out.println("  IDS:            " + (enabled ? "ON (monitoring)" : "OFF (disabled)"));
-        System.out.println("  Mode:           " + (activeMode ? "ACTIVE (log + drop)" : "PASSIVE (log only)"));
-        System.out.println("  Snooped leases: " + snoopedBindings.size());
-        for (var entry : snoopedBindings.entrySet()) {
-            System.out.println("    " + entry.getKey() + " -> " + entry.getValue());
+        // Build the full status box first, then emit it as one atomic block so
+        // concurrent receiver/security log lines can't break it up.
+        java.util.List<String> lines = new java.util.ArrayList<>();
+        lines.add("┌─ IDS Status ──────────────────────────");
+        lines.add("│  State          : " + (enabled ? "ON  (monitoring)" : "OFF (disabled)"));
+        lines.add("│  Mode           : " + (activeMode ? "ACTIVE  (log + drop)" : "PASSIVE (log only)"));
+        lines.add("│  Snooped leases : " + snoopedBindings.size());
+        if (snoopedBindings.isEmpty()) {
+            lines.add("│    (none)");
+        } else {
+            for (var entry : snoopedBindings.entrySet()) {
+                lines.add("│    • " + entry.getKey() + "  →  " + entry.getValue());
+            }
         }
-        System.out.println("  Spoof alerts:   " + spoofAlerts.get());
-        System.out.println("  MAC-IP alerts:  " + macIpAlerts.get());
-        System.out.println("  Flood alerts:   " + floodAlerts.get());
+        lines.add("│  Alert counters :");
+        lines.add("│    • Spoof   : " + spoofAlerts.get());
+        lines.add("│    • MAC-IP  : " + macIpAlerts.get());
+        lines.add("│    • Flood   : " + floodAlerts.get());
+        lines.add("└───────────────────────────────────────");
+        log.block(lines.toArray(new String[0]));
     }
 
     /*

@@ -138,7 +138,10 @@ public abstract class Node {
     }
 
     /**
-     * Processes a frame that has passed MAC filtering
+     * Processes a frame that has passed MAC filtering. Logs the full
+     * frame → packet → inner-message tree atomically before dispatching to the
+     * protocol handler so concurrent CLI/receiver activity can't break the
+     * indentation.
      */
     protected void processFrame(EthernetFrame frame) {
         // Decode the Ethernet frame payload into an IP packet and dispatch it for handling
@@ -148,9 +151,33 @@ public abstract class Node {
         // This keeps cache warm without requiring an explicit ARP exchange every time.
         arpCache.put(packet.sourceIPAddress(), frame.sourceMACAddress());
 
-        log.rx(frame.toString());
-        log.info("  └─ " + packet);
+        String inner = describeInner(packet);
+        if (inner != null) {
+            log.event("RX " + frame, "  └─ " + packet, inner);
+        } else {
+            log.event("RX " + frame, "  └─ " + packet);
+        }
+
         handleIPPacket(packet, frame);
+    }
+
+    /**
+     * Render the inner protocol message of a packet as a tree leaf, or
+     * {@code null} if the protocol has no further structure to display.
+     * Used by {@link #processFrame} to print one atomic 3-line tree per RX.
+     */
+    protected String describeInner(IPPacket packet) {
+        try {
+            return switch (packet.protocol()) {
+                case IPPacket.PROTOCOL_DHCP -> "     └─ " + DHCPMessage.decode(packet.data());
+                case IPPacket.PROTOCOL_ARP  -> "     └─ " + ARPMessage.decode(packet.data());
+                case IPPacket.PROTOCOL_ICMP -> "     └─ " + PingMessage.decode(packet.data());
+                case IPPacket.PROTOCOL_DATA -> "     └─ " + TextMessage.decode(packet.data());
+                default -> null;
+            };
+        } catch (Exception e) {
+            return null;
+        }
     }
 
     /**
@@ -184,9 +211,10 @@ public abstract class Node {
      */
     protected void handleDHCPPacket(IPPacket packet) {
         if (dhcpClient == null) return;
+        // The inner DHCP line was already printed by processFrame's atomic
+        // 3-line RX tree via describeInner(); just hand the message off here.
         try {
             DHCPMessage msg = DHCPMessage.decode(packet.data());
-            log.info("     └─ " + msg);
             dhcpClient.deliver(msg);
         } catch (Exception e) {
             log.error("Bad DHCP message: " + e.getMessage());
@@ -317,14 +345,22 @@ public abstract class Node {
     }
 
     /**
-     * Send an Ethernet Frame to the LAN emulator
+     * Send an Ethernet Frame to the LAN emulator. Logs the full frame → packet
+     * → inner-message tree atomically so concurrent receiver activity can't
+     * interleave with the TX log.
      */
     protected void sendFrame(EthernetFrame frame, InetSocketAddress targetAddress) throws IOException {
         byte[] data = frame.encode();
-        DatagramPacket packet = new DatagramPacket(data, data.length, targetAddress);
-        socket.send(packet);
-        log.tx(frame.toString());
-        log.info("  └─ " + IPPacket.decode(frame.data()));
+        DatagramPacket udp = new DatagramPacket(data, data.length, targetAddress);
+        socket.send(udp);
+
+        IPPacket packet = IPPacket.decode(frame.data());
+        String inner = describeInner(packet);
+        if (inner != null) {
+            log.event("TX " + frame, "  └─ " + packet, inner);
+        } else {
+            log.event("TX " + frame, "  └─ " + packet);
+        }
     }
 
     /**
@@ -454,25 +490,41 @@ public abstract class Node {
      * Print available CLI commands
      */
     protected void printHelp() {
-        System.out.println("\n--- " + name + " Commands ---");
-        System.out.println("  ping <destIP> [count <n>]  - Send ping(s)");
-        System.out.println("  arp show                   - Show learned ARP cache");
-        System.out.println("  arp resolve <ip>           - Send ARP request for an IP");
-        System.out.println("  msg <destIP> <text>        - Send plaintext message");
-        System.out.println("  emsg <destIP> <text>       - Send encrypted message");
-        System.out.println("  info                       - Show interface info");
-        System.out.println("  help                       - Show this help");
-        System.out.println("  quit                       - Exit");
+        java.util.List<String> lines = new java.util.ArrayList<>();
+        lines.add("┌─ " + name + " Commands ──────────────────────────────");
+        lines.add("│  ping <destIP> [count <n>]   Send ping(s)");
+        lines.add("│  arp show                    Show learned ARP cache");
+        lines.add("│  arp resolve <ip>            Send ARP request for an IP");
+        lines.add("│  msg <destIP> <text>         Send plaintext message");
+        lines.add("│  emsg <destIP> <text>        Send encrypted message");
+        lines.add("│  info                        Show interface info");
+        lines.add("│  help                        Show this help");
+        lines.add("│  quit                        Exit");
+        appendExtraHelp(lines);
+        lines.add("└──────────────────────────────────────────────────");
+        log.block(lines.toArray(new String[0]));
     }
 
-    /** 
+    /**
+     * Hook for subclasses to append device-specific commands to the help box.
+     * Each line should already be prefixed with "│  " for consistent rendering.
+     */
+    protected void appendExtraHelp(java.util.List<String> lines) {
+        // base node has no extras
+    }
+
+    /**
      * Print interface information
      */
     protected void printInfo() {
-        System.out.println("  Name: " + name);
-        System.out.println("  MAC:  " + networkInterfaceCard.macAddress());
-        System.out.println("  IP:   " + networkInterfaceCard.ipAddress());
-        System.out.println("  LAN:  " + networkInterfaceCard.lanID());
-        System.out.println("  Port: " + networkInterfaceCard.devicePortNumber());
+        log.block(
+            "┌─ " + name + " Interface ─────────────────",
+            "│  Name : " + name,
+            "│  MAC  : " + networkInterfaceCard.macAddress(),
+            "│  IP   : " + networkInterfaceCard.ipAddress(),
+            "│  LAN  : " + networkInterfaceCard.lanID(),
+            "│  Port : " + networkInterfaceCard.devicePortNumber(),
+            "└─────────────────────────────────────"
+        );
     }
 }

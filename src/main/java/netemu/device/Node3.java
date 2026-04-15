@@ -78,16 +78,20 @@ public class Node3 extends Node {
     }
 
     private void printFirewallHelp() {
-        System.out.println("  fw add block src <IP>    - Block source IP");
-        System.out.println("  fw remove block src <IP> - Unblock source IP");
-        System.out.println("  fw on|off                - Enable/disable firewall");
-        System.out.println("  fw status                - Show firewall status");
+        log.block(
+            "┌─ Firewall Commands ───────────────────",
+            "│  fw add block src <IP>    Block a source IP",
+            "│  fw remove block src <IP> Unblock a source IP",
+            "│  fw on | off              Enable / disable firewall",
+            "│  fw status                Show firewall status",
+            "└───────────────────────────────────────"
+        );
     }
 
     @Override
-    protected void printHelp() {
-        super.printHelp();
-        System.out.println("  fw ...                    - Firewall commands (type 'fw' for details)");
+    protected void appendExtraHelp(java.util.List<String> lines) {
+        lines.add("│  ─── firewall ───");
+        lines.add("│  fw …                        Firewall commands (type 'fw' for details)");
     }
 
     public static void main(String[] args) throws IOException {

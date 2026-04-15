@@ -32,32 +32,47 @@ public class Node1 extends Node {
 
     @Override
     protected void handleFrame(EthernetFrame frame) {
-        // SNIFFING MODE - Log all frames
+        // SNIFFING MODE — log the full frame → packet → inner-message tree
+        // atomically so concurrent receiver/CLI activity can't break it apart.
         if (sniffing && !frame.destinationMACAddress().equals(networkInterfaceCard.macAddress())) {
-            log.info("[Sniffed] " + frame);
-
             try {
                 IPPacket packet = IPPacket.decode(frame.data());
-                log.info("  └─ " + packet);
-                if (packet.protocol() == IPPacket.PROTOCOL_ICMP) {
-                    PingMessage ping = PingMessage.decode(packet.data());
-                    log.info("     └─ " + ping);
-                } else if (packet.protocol() == IPPacket.PROTOCOL_DATA) {
-                    // Use decodeRaw to see exactly what's on the wire (no decryption)
-                    TextMessage msg = TextMessage.decodeRaw(packet.data());
-                    if (msg.isEncrypted()) {
-                        log.info("     └─ " + msg.toString() + " (cannot read — encrypted)");
-                    } else {
-                        log.info("     └─ " + msg);
-                    }
+                String inner = sniffInner(packet);
+                if (inner != null) {
+                    log.event("[Sniffed] " + frame, "  └─ " + packet, inner);
+                } else {
+                    log.event("[Sniffed] " + frame, "  └─ " + packet);
                 }
             } catch (Exception e) {
-                // Invalid IP packet, log the raw frame
+                // Invalid IP packet — still log the raw frame so the operator sees it
+                log.event("[Sniffed] " + frame);
             }
         }
         // Normal MAC filtering for processing
         if (frame.destinationMACAddress().equals(networkInterfaceCard.macAddress()) || frame.destinationMACAddress().isBroadcast()) {
             processFrame(frame);
+        }
+    }
+
+    /**
+     * Render the inner protocol message of a sniffed packet. Differs from
+     * {@code Node.describeInner} in that text messages use {@code decodeRaw}
+     * so encrypted traffic stays encrypted in the sniffer's view.
+     */
+    private String sniffInner(IPPacket packet) {
+        try {
+            return switch (packet.protocol()) {
+                case IPPacket.PROTOCOL_ICMP -> "     └─ " + PingMessage.decode(packet.data());
+                case IPPacket.PROTOCOL_DATA -> {
+                    TextMessage msg = TextMessage.decodeRaw(packet.data());
+                    yield "     └─ " + msg + (msg.isEncrypted() ? " (cannot read — encrypted)" : "");
+                }
+                case IPPacket.PROTOCOL_DHCP -> "     └─ " + DHCPMessage.decode(packet.data());
+                case IPPacket.PROTOCOL_ARP  -> "     └─ " + ARPMessage.decode(packet.data());
+                default -> null;
+            };
+        } catch (Exception e) {
+            return null;
         }
     }
 
@@ -292,14 +307,14 @@ public class Node1 extends Node {
     }
 
     @Override
-    protected void printHelp() {
-        super.printHelp();
-        System.out.println("  spoof on <IP> | off        - Enable/disable IP spoofing");
-        System.out.println("  arpspoof on <victim> <ip>  - Continuously poison victim ARP cache");
-        System.out.println("  arpspoof once <victim> <ip>- Send one forged ARP reply");
-        System.out.println("  arpspoof off               - Disable ARP spoofing");
-        System.out.println("  sniff on | off             - Enable/disable promiscuous sniffing");
-        System.out.println("  flood <destIP> <count>     - Send ping flood");
+    protected void appendExtraHelp(java.util.List<String> lines) {
+        lines.add("│  ─── attacker actions ───");
+        lines.add("│  spoof on <IP> | off         Enable/disable IP spoofing");
+        lines.add("│  arpspoof on <victim> <ip>   Continuously poison victim ARP cache");
+        lines.add("│  arpspoof once <victim> <ip> Send one forged ARP reply");
+        lines.add("│  arpspoof off                Disable ARP spoofing");
+        lines.add("│  sniff on | off              Enable/disable promiscuous sniffing");
+        lines.add("│  flood <destIP> <count>      Send ping flood");
     }
 
     public static void main(String[] args) throws IOException {

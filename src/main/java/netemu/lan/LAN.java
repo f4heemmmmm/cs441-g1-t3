@@ -71,21 +71,25 @@ public class LAN {
     private void handleFrame(byte[] data, InetSocketAddress senderAddress, DatagramSocket socket) {
         try {
             EthernetFrame frame = EthernetFrame.decode(data);
-            log.rx("Received " + frame);
 
             if (shouldDropByDAI(frame)) {
                 return;
             }
 
+            // Build the full RX-and-fanout tree first, then emit it as a single
+            // atomic event so that concurrent frames from multiple senders don't
+            // interleave their forwarding lines.
             String srcMac = frame.sourceMACAddress().value();
+            java.util.List<String> children = new java.util.ArrayList<>();
             for (var entry : endpoints.entrySet()) {
                 if (!entry.getKey().equals(srcMac)) {
                     InetSocketAddress target = entry.getValue();
                     DatagramPacket out = new DatagramPacket(data, data.length, target);
                     socket.send(out);
-                    log.info("  -> forwarded to " + entry.getKey() + " (port " + target.getPort() + ")");
+                    children.add("  └─ forwarded to " + entry.getKey() + " (port " + target.getPort() + ")");
                 }
             }
+            log.event("RX Received " + frame, children.toArray(new String[0]));
         } catch (Exception e) {
             log.error("Failed to broadcast frame: " + e.getMessage());
         }
@@ -189,10 +193,13 @@ public class LAN {
     }
 
     private void printHelp() {
-        System.out.println("Commands:");
-        System.out.println("  dai on|off|status  - Toggle/view LAN-side Dynamic ARP Inspection");
-        System.out.println("  info               - Show LAN state");
-        System.out.println("  help               - Show this help");
+        log.block(
+            "┌─ LAN" + lanID + " Commands ──────────────────────────────",
+            "│  dai on | off | status   Toggle/view LAN-side Dynamic ARP Inspection",
+            "│  info                    Show LAN state",
+            "│  help                    Show this help",
+            "└─────────────────────────────────────────────────────"
+        );
     }
 
     public static void main(String[] args) throws IOException {

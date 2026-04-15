@@ -55,6 +55,19 @@ public final class AddressTable {
         3, LAN3_PORT
     );
 
+    // Spec-mandated MAC -> IP bindings. DHCP server consults this to ensure each
+    // node always receives its topology IP regardless of DISCOVER ordering.
+    private static final Map<MACAddress, IPAddress> PREFERRED_IP = Map.of(
+        MAC_N1, IP_N1,
+        MAC_N2, IP_N2,
+        MAC_N3, IP_N3,
+        MAC_N4, IP_N4
+    );
+
+    public static Optional<IPAddress> preferredIPFor(MACAddress mac) {
+        return Optional.ofNullable(PREFERRED_IP.get(mac));
+    }
+
     // Mutable IP -> MAC table. Routers are seeded statically; nodes are populated either
     // by the legacy seed below (static mode) or by DHCP at runtime.
     private static final Map<IPAddress, MACAddress> IP_TO_MAC = new ConcurrentHashMap<>();
